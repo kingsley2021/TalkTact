@@ -75,7 +75,7 @@ internal class ViewReader(private val a: Activity) {
     fun findList(root: View, input: View?): ViewGroup? {
         val inputTop = input?.let { topOf(it) } ?: height
         val strict = ArrayList<ViewGroup>()
-        val relaxed = ArrayList<ViewGroup>()
+        val relaxedNotes = ArrayList<String>()
         val rejected = ArrayList<String>()
 
         walk(root) { v ->
@@ -116,7 +116,7 @@ internal class ViewReader(private val a: Activity) {
             when {
                 fatal.isNotEmpty() -> rejected.add(describe(v) + " [$fatal]")
                 soft.isEmpty() -> strict.add(v)
-                else -> relaxed.add(describe(v) + " [$soft]")
+                else -> relaxedNotes.add(describe(v) + " [$soft]")
             }
         }
 
@@ -125,10 +125,10 @@ internal class ViewReader(private val a: Activity) {
         val chosen = pool.maxWithOrNull(compareBy({ it.width.toLong() * it.height }, { it.childCount }))
         if (chosen == null) {
             lastCandidates = "入选=0；位置不合格=${rejected.take(6).joinToString(" / ").ifEmpty { "无" }}；" +
-                "仅差高度/子视图=${relaxed.take(3).joinToString(" / ").ifEmpty { "无" }}"
+                "仅差高度/子视图=${relaxedNotes.take(3).joinToString(" / ").ifEmpty { "无" }}"
         } else {
             lastCandidates = "入选=${strict.size}，选中=${describe(chosen)}；" +
-                "仅差高度/子视图=${relaxed.take(3).joinToString(" / ").ifEmpty { "无" }}；" +
+                "仅差高度/子视图=${relaxedNotes.take(3).joinToString(" / ").ifEmpty { "无" }}；" +
                 "位置不合格=${rejected.take(4).joinToString(" / ").ifEmpty { "无" }}"
         }
         return chosen
