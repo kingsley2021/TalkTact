@@ -1,0 +1,361 @@
+#### FILE: app/src/main/java/dev/goutou/wingman/Defaults.kt
+package dev.goutou.wingman
+
+import android.content.Context
+import android.content.SharedPreferences
+
+const val PREF_NAME = "cfg"
+const val MODULE_PKG = "dev.goutou.wingman"
+const val DEFAULT_BASE = "https://api.openai.com/v1"
+const val DEFAULT_MODEL = "gpt-4o-mini"
+
+// 精简版「狗头军师」提示词。想用完整知识库：把仓库里的 SKILL.md / references 精简后粘贴到 App 的「提示词」页。
+val DEFAULT_PROMPT = """
+你是「狗头军师」，用户的微信聊天副驾。输入是最近的微信聊天记录（对方/我）。
+流程：先判断对方这句话的真实意图和情绪；区分事实、推测、未知，不替对方脑补；评估回复风险；再给出可直接发送的回复。
+规则：
+- 回复要像真人发微信：口语、短句、1-2句，不要客服腔，不要“当然可以”，少用感叹号和表情。
+- 给3条不同策略的回复：稳妥 / 轻松幽默 / 推进下一步，风格要明显不同。
+- 不替用户做承诺（金钱、时间、见面地点等）。涉及转账、红包、借钱、验证码、账号信息，提醒谨慎，不要直接答应。
+- 对方情绪低落或有冲突时，先接住情绪再谈事。
+- 记录里“对方(某某)”表示群聊里的发言人。如果出现多个发言人就是群聊：先判断最后一句是不是在对用户说话或 @用户；与用户无关时，在 note 里说明，replies 给适合插话的短句，并允许其中一条是“先不回”。
+- “[图片/表情]”表示对方发了图片或表情包，内容未知，不要编造图片内容。
+- 信息不足时在 note 里说明，并让其中一条回复用来追问。
+只输出 JSON，不要任何额外文字：
+{"intent":"一句话","risk":"低/中/高","note":"一句话提醒","replies":[{"style":"稳妥","text":"..."},{"style":"幽默","text":"..."},{"style":"推进","text":"..."}]}
+""".trimIndent()
+
+data class ConfigData(
+    val baseUrl: String = DEFAULT_BASE,
+    val apiKey: String = "",
+    val model: String = DEFAULT_MODEL,
+    val prompt: String = DEFAULT_PROMPT,
+    val enabled: Boolean = true,
+    val ctx: Int = 8,
+    val scopeOk: Boolean = false,
+) {
+    companion object {
+        fun from(p: SharedPreferences) = ConfigData(
+            baseUrl = p.getString("base_url", DEFAULT_BASE) ?: DEFAULT_BASE,
+            apiKey = p.getString("api_key", "") ?: "",
+            model = p.getString("model", DEFAULT_MODEL) ?: DEFAULT_MODEL,
+            prompt = (p.getString("prompt_v2", null) ?: DEFAULT_PROMPT).ifBlank { DEFAULT_PROMPT },
+            enabled = p.getBoolean("enabled", true),
+            ctx = p.getInt("ctx", 8).coerceIn(2, 20),
+            scopeOk = p.getBoolean("scope_ok", false),
+        )
+    }
+}
+
+class Config(ctx: Context) {
+    @Suppress("DEPRECATION", "WorldReadableFiles")
+    private val sp: SharedPreferences = try {
+        ctx.getSharedPreferences(PREF_NAME, Context.MODE_WORLD_READABLE)
+    } catch (e: SecurityException) {
+        ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+    }
+
+    fun load() = ConfigData.from(sp)
+
+    fun save(d: ConfigData) {
+        val e = sp.edit()
+        if (d.prompt == DEFAULT_PROMPT) e.remove("prompt_v2") else e.putString("prompt_v2", d.prompt)
+        e.remove("prompt")
+            .putString("base_url", d.baseUrl.trim())
+            .putString("api_key", d.apiKey.trim())
+            .putString("model", d.model.trim())
+            .putBoolean("enabled", d.enabled)
+            .putInt("ctx", d.ctx)
+            .putBoolean("scope_ok", d.scopeOk)
+            .apply()
+    }
+}
+
+#### FILE: app/src/main/java/dev/goutou/wingman/Engine.kt
+package dev.goutou.wingman
+
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+
+data class Msg(val fromMe: Boolean, val text: String, val who: String = "")
+data class Reply(val style: String, val text: String)
+data class Suggestion(val intent: String, val risk: String, val note: String, val replies: List<Reply>)
+
+/** OpenAI 兼容接口（OpenAI / OpenRouter / DeepSeek / 自建中转都行）。 */
+object Engine {
+    fun analyze(c: ConfigData, msgs: List<Msg>): Suggestion {
+        require(c.apiKey.isNotBlank()) { "未填写 API Key" }
+        val chat = msgs.joinToString("\n") {
+            val label = if (it.fromMe) "我" else if (it.who.isNotBlank()) "对方(${it.who})" else "对方"
+            "$label: ${it.text}"
+        }
+        val body = JSONObject()
+            .put("model", c.model)
+            .put("temperature", 0.8)
+            .put(
+                "messages", JSONArray()
+                    .put(JSONObject().put("role", "system").put("content", c.prompt))
+                    .put(JSONObject().put("role", "user").put("content", "聊天记录（时间顺序）：\n$chat\n\n请严格按系统要求只输出 JSON。"))
+            )
+        val out = post(endpoint(c.baseUrl), c.apiKey, body.toString())
+        val content = JSONObject(out).getJSONArray("choices").getJSONObject(0)
+            .getJSONObject("message").getString("content")
+        return parse(content)
+    }
+
+    private fun endpoint(base: String): String {
+        val u = base.trim().trimEnd('/')
+        return if (u.endsWith("/chat/completions")) u else "$u/chat/completions"
+    }
+
+    private fun post(url: String, key: String, json: String): String {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.connectTimeout = 15000
+        conn.readTimeout = 40000
+        conn.doOutput = true
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Authorization", "Bearer $key")
+        conn.outputStream.use { it.write(json.toByteArray()) }
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
+        if (code !in 200..299) error("HTTP $code ${text.take(160)}")
+        return text
+    }
+
+    private fun parse(raw: String): Suggestion {
+        val s = raw.indexOf('{')
+        val e = raw.lastIndexOf('}')
+        require(s >= 0 && e > s) { "模型没有返回 JSON" }
+        val o = JSONObject(raw.substring(s, e + 1))
+        val arr = o.optJSONArray("replies") ?: JSONArray()
+        val replies = (0 until arr.length()).map {
+            val r = arr.getJSONObject(it)
+            Reply(r.optString("style"), r.optString("text"))
+        }.filter { it.text.isNotBlank() }
+        return Suggestion(o.optString("intent"), o.optString("risk"), o.optString("note"), replies)
+    }
+}
+
+#### FILE: app/src/main/java/dev/goutou/wingman/Overlay.kt
+package dev.goutou.wingman
+
+import android.app.Activity
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.NinePatchDrawable
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.AbsListView
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
+import de.robv.android.xposed.XSharedPreferences
+import de.robv.android.xposed.XposedBridge
+import java.util.WeakHashMap
+
+object Overlay {
+    private val map = WeakHashMap<Activity, Panel>()
+    fun attach(a: Activity) {
+        if (map.containsKey(a)) return
+        val p = Panel(a)
+        map[a] = p
+        p.install()
+    }
+}
+
+/** 悬浮在聊天页顶部的候选回复卡片。只读消息、只填输入框，不自动发送。 */
+class Panel(private val a: Activity) {
+    private val h = Handler(Looper.getMainLooper())
+    private val card = LinearLayout(a)
+    private val title = TextView(a)
+    private val body = LinearLayout(a)
+    private val prefs = XSharedPreferences(MODULE_PKG, PREF_NAME)
+    private var lastKey = ""
+    private var dismissedKey = ""
+    @Volatile private var busy = false
+    private val d = a.resources.displayMetrics.density
+    private fun dp(x: Int) = (x * d).toInt()
+
+    private val tick = object : Runnable {
+        override fun run() {
+            if (a.isFinishing || a.isDestroyed) return
+            try { scan() } catch (t: Throwable) { XposedBridge.log(t) }
+            h.postDelayed(this, 1500)
+        }
+    }
+
+    fun install() {
+        card.orientation = LinearLayout.VERTICAL
+        card.background = GradientDrawable().apply {
+            cornerRadius = dp(22).toFloat(); setColor(0xF5FFFFFF.toInt()); setStroke(dp(1), 0x667C3AED)
+        }
+        card.setPadding(dp(14), dp(10), dp(14), dp(10))
+        card.elevation = dp(8).toFloat()
+        card.visibility = View.GONE
+
+        val head = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        title.setTextColor(0xFF7C3AED.toInt()); title.textSize = 13f
+        title.setOnClickListener { lastKey = ""; dismissedKey = "" } // 点标题重新生成
+        val close = TextView(a).apply { text = "✕"; textSize = 14f; setTextColor(0xFF888888.toInt()); setPadding(dp(12), 0, 0, 0) }
+        close.setOnClickListener { dismissedKey = lastKey; card.visibility = View.GONE }
+        head.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        head.addView(close)
+        body.orientation = LinearLayout.VERTICAL
+        card.addView(head)
+        card.addView(body)
+
+        val lp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP)
+        lp.setMargins(dp(10), dp(96), dp(10), 0) // 顶部偏移：避开状态栏+标题栏，按机型调
+        (a.window.decorView as ViewGroup).addView(card, lp)
+        h.postDelayed(tick, 1500)
+    }
+
+    private fun scan() {
+        val decor = a.window.decorView
+        if (!decor.hasWindowFocus()) return
+        if (!prefs.file.canRead()) { show("配置读取失败：请确认模块已在 LSPosed 启用且勾选了微信"); return }
+        prefs.reload()
+        val cfg = ConfigData.from(prefs)
+        if (!cfg.enabled || findEdit(decor) == null) { card.visibility = View.GONE; return }
+
+        val list = findList(decor) ?: run { card.visibility = View.GONE; return }
+        val msgs = readRows(list).takeLast(cfg.ctx)
+        if (msgs.isEmpty() || msgs.last().fromMe) { card.visibility = View.GONE; return }
+
+        val key = msgs.joinToString("|") { (if (it.fromMe) "M" else "O") + it.text }
+        if (key == dismissedKey) return
+        if (key == lastKey || busy) return
+        lastKey = key
+        busy = true
+        show("狗头军师思考中…")
+        Thread {
+            try {
+                val s = Engine.analyze(cfg, msgs)
+                h.post { render(s, msgs) }
+            } catch (t: Throwable) {
+                h.post { show("生成失败：${t.message}（点这里重试）") }
+            } finally { busy = false }
+        }.start()
+    }
+
+    private fun show(t: String) {
+        title.text = t; body.removeAllViews(); card.visibility = View.VISIBLE
+    }
+
+    private fun render(s: Suggestion, msgs: List<Msg>) {
+        title.text = "狗头军师 · ${s.intent} · 风险${s.risk}"
+        body.removeAllViews()
+        body.addView(TextView(a).apply {
+            text = "读取：" + msgs.takeLast(3).joinToString(" ‖ ") {
+                (if (it.fromMe) "我" else "对方" + (if (it.who.isNotBlank()) "(${it.who})" else "")) + ":" + it.text.take(16)
+            }
+            textSize = 10f; setTextColor(0xFF999999.toInt()); setPadding(0, dp(2), 0, dp(2))
+        })
+        if (s.note.isNotBlank()) body.addView(TextView(a).apply {
+            text = s.note; textSize = 12f; setTextColor(0xFF666666.toInt()); setPadding(0, dp(4), 0, dp(2))
+        })
+        for (r in s.replies.take(3)) {
+            val tv = TextView(a).apply {
+                text = "${r.style}｜${r.text}"; textSize = 14f; setTextColor(0xFF222222.toInt())
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                background = GradientDrawable().apply { cornerRadius = dp(14).toFloat(); setColor(0xFFEDE7FA.toInt()) }
+                setOnClickListener { fill(r.text) }
+            }
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(6)
+            body.addView(tv, lp)
+        }
+        card.visibility = View.VISIBLE
+    }
+
+    private fun fill(text: String) {
+        val et = findEdit(a.window.decorView) ?: return
+        et.setText(text); et.setSelection(text.length); et.requestFocus()
+    }
+
+    // ---------- 读取聊天 ----------
+    private fun findEdit(v: View): EditText? {
+        if (v is EditText && v.isShown) return v
+        if (v is ViewGroup) for (i in 0 until v.childCount) findEdit(v.getChildAt(i))?.let { return it }
+        return null
+    }
+
+    private fun findList(v: View): ViewGroup? {
+        if (v is ViewGroup) {
+            if ((v is AbsListView || v.javaClass.name.contains("RecyclerView")) && v.isShown && v.childCount > 1) return v
+            for (i in 0 until v.childCount) findList(v.getChildAt(i))?.let { return it }
+        }
+        return null
+    }
+
+    private val noise = Regex("""^\d+\s*["'″′”“]*$""")
+    private val timeRe = Regex("""^((昨天|今天|星期.|周.|\d{4}年)?\s*\d{1,2}[:：]\d{2}|\d{1,2}月\d{1,2}日.*)$""")
+
+    private class TV(val text: String, val top: Int, val bubble: Boolean)
+
+    private fun isBubble(v: View, row: View): Boolean {
+        var c: View? = v
+        while (c != null) {
+            val bg = c.background
+            if (bg != null && bg.current is NinePatchDrawable) return true
+            if (c === row) break
+            c = c.parent as? View
+        }
+        return false
+    }
+
+    private val tags = setOf("成员", "群主", "管理员", "群管理员", "新人", "活跃", "潜水")
+
+    /** 头像位置判方向；气泡(.9图背景)里的文字才算消息，头像上方的昵称不算；群聊带发言人。 */
+    private fun readRows(list: ViewGroup): List<Msg> {
+        val w = a.resources.displayMetrics.widthPixels
+        val out = ArrayList<Msg>()
+        for (i in 0 until list.childCount) {
+            val row = list.getChildAt(i)
+            val avatars = ArrayList<IntArray>() // [x中心, top, 尺寸]
+            val tvs = ArrayList<TV>()
+            fun walk(v: View) {
+                if (!v.isShown) return
+                if (v is ImageView) {
+                    val sz = v.width
+                    if (sz in dp(30)..dp(72) && Math.abs(v.width - v.height) < dp(4)) {
+                        val loc = IntArray(2); v.getLocationOnScreen(loc)
+                        avatars.add(intArrayOf(loc[0] + sz / 2, loc[1], sz))
+                    }
+                }
+                if (v is TextView && v !is EditText) {
+                    val t = v.text?.toString()?.trim().orEmpty()
+                    if (t.isNotEmpty()) {
+                        val loc = IntArray(2); v.getLocationOnScreen(loc)
+                        tvs.add(TV(t, loc[1], isBubble(v, row)))
+                    }
+                }
+                if (v is ViewGroup) for (k in 0 until v.childCount) walk(v.getChildAt(k))
+            }
+            walk(row)
+            val av = avatars.minByOrNull { minOf(it[0], w - it[0]) } ?: continue
+            val fromMe = av[0] > w / 2
+            val bubbles = tvs.filter { it.bubble }
+            val msgTv: TV? = when {
+                bubbles.isNotEmpty() -> bubbles.maxByOrNull { it.top }
+                tvs.size == 1 -> tvs[0]
+                else -> tvs.filter { it.top >= av[1] + av[2] * 0.55 }.maxByOrNull { it.top }
+            }
+            if (msgTv == null) { out.add(Msg(fromMe, "[图片/表情]")); continue }
+            val text = msgTv.text
+            if (text.length > 300 || timeRe.matches(text) || noise.matches(text)) continue
+            val who = if (fromMe) "" else tvs.filter { it !== msgTv && it.top < msgTv.top && it.text !in tags }
+                .maxByOrNull { it.text.length }?.text.orEmpty()
+            out.add(Msg(fromMe, text, who))
+        }
+        return out
+    }
+}
