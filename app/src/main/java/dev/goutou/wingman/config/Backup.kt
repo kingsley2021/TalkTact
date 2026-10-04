@@ -85,7 +85,7 @@ object Backup {
         c["skillId"].asStr()?.takeIf { it.isNotBlank() }?.let { cfg = cfg.copy(skillId = it) }
         c["mentorAdvanced"].asBool()?.let { cfg = cfg.copy(mentorAdvanced = it) }
 
-        val imported = root["roles"].let { Roles.decode(Json.encode(it)) }
+        val imported = root["roles"]?.let { Roles.decode(Json.encode(it)) }.orEmpty()
         val byName = LinkedHashMap<String, Role>()
         currentRoles.forEach { byName[it.name] = it }
         imported.forEach { byName[it.name] = it }
