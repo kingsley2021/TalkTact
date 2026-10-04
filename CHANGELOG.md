@@ -1,5 +1,23 @@
 # 变更记录
 
+## v0.5.2
+
+**换了应用图标（自适应图标）**
+
+原来用的是 Android 默认那个机器人图标（`@android:drawable/sym_def_app_icon`），`res/` 底下压根没有图标资源。
+
+源图 `art/grok_1791135705985_1791135800643edit.jpg`（488×488，深炭灰渐变底 + 银白发光主体）。
+直接整图当图标会出问题：**主体在垂直方向占了约 73%，而自适应图标的安全区只有中间约 66%** ——
+裁成圆形时「气泡」和「TT」的上下会被切掉。所以：
+
+- **前景层**缩到 90%（73% × 0.90 ≈ 66%，正好落进安全区）+ 圆角羽化边缘。
+- **背景层**是整图重度模糊再压暗 18% —— 和前景同色系，羽化边能自然化进去，看不出接缝。
+- **单色层**给 Android 13+ 的主题图标用：拿亮度当 alpha（银白主体变实心、深色底变透明），套同一个圆角羽化。
+- 生成 5 档 mipmap（mdpi→xxxhdpi）+ `mipmap-anydpi-v26/ic_launcher.xml`（含 `<monochrome>`）。
+- manifest 换成 `android:icon="@mipmap/ic_launcher"` + `android:roundIcon="@mipmap/ic_launcher_round"`。
+- 删掉 `art/icon.png`（那是个 1 字节的空占位）。
+
+
 ## v0.5.1
 
 **改名：狗头军师 → TalkTact**

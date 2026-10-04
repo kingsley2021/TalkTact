@@ -11,8 +11,8 @@ android {
         applicationId = "dev.goutou.wingman"
         minSdk = 31  // Android 12+：液态玻璃的真实背景模糊走 RenderEffect
         targetSdk = 34
-        versionCode = 18
-        versionName = "0.5.1"
+        versionCode = 19
+        versionName = "0.5.2"
     }
     buildTypes {
         release { isMinifyEnabled = false }
