@@ -244,20 +244,27 @@ internal class Panel(private val a: Activity) {
 
     private fun tick() {
         val decor = a.window?.decorView ?: return
-        if (!decor.hasWindowFocus()) return
 
         // 配置文件变了就地重读。提到最前面：下面几个早退分支都依赖它，尤其是「手动抓取」。
         refreshPrefs()
 
         // App 里点了「抓当前微信界面」→ 把当前页面结构 dump 回去。
-        // 必须排在输入框判定**之前**：出问题的那几个聊天页正是在下面 `input == null` 处提前 return 的，
-        // 而诊断入口原本是长按卡片标题 —— 卡片都不弹，那个入口根本够不着。
+        // 刻意排在**所有**判定之前（包括 hasWindowFocus）：
+        // 出问题的那几个聊天页可能是在下面任意一个分支提前 return 的，而诊断入口原本是长按卡片标题 ——
+        // 卡片都不弹，那个入口根本够不着；连「窗口没焦点」这种原因也要能抓到证据。
         val req = prefs.getLong(Keys.DIAG_REQ, 0L)
         if (req > lastDiagReq) {
             lastDiagReq = req
-            dumpDiagnosis(decor, null, reader.findChatInput(decor), "手动抓取（App 触发）", manual = true)
+            dumpDiagnosis(
+                decor, null, reader.findChatInput(decor),
+                "手动抓取（App 触发）｜hasWindowFocus=${decor.hasWindowFocus()}｜" +
+                    "能用的输入框=${reader.findChatInput(decor)?.let { "有" } ?: "无"}",
+                manual = true,
+            )
             return
         }
+
+        if (!decor.hasWindowFocus()) return
 
         val cachedInput = inputRef
         val input = if (cachedInput != null && cachedInput.isShown) {
