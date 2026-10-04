@@ -59,7 +59,7 @@ data class ConfigData(
     val bgUri: String = "",
     /** 背景压暗程度，保证玻璃上的字看得清 */
     val bgDim: Float = 0.30f,
-    /** 当前选中的 skill：classic / coder / custom */
+    /** 当前选中的 skill：classic / full / coder / custom */
     val skillId: String = "classic",
     /** 「军师」页停在进阶视图。以前是用 maxTokens==0 猜的，会粘住，改成独立记住 */
     val mentorAdvanced: Boolean = false,

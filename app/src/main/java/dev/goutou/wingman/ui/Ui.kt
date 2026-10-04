@@ -425,6 +425,7 @@ enum class Health(val label: String) { OK("就绪"), WARN("待确认"), BAD("有
 
 /** skillId → 给人看的名字。运行状态页和军师页共用，别再各写一份 if-else。 */
 fun skillName(id: String): String = when (id) {
+    "full" -> "狗头军师·满血版"
     "coder" -> "程序员搭子"
     "custom" -> "自定义 skill"
     else -> "原版狗头军师"
