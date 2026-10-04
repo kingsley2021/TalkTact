@@ -1,0 +1,363 @@
+#### FILE: app/src/main/java/dev/goutou/wingman/Ui.kt
+package dev.goutou.wingman
+
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+// 整体界面缩放：0.5 = 缩小一半。嫌小就改 0.6 / 0.7
+const val UI_SCALE = 0.5f
+
+// ---- 配色：对照 MapleUltra 截图的紫色 Material You 风格 ----
+val Purple = Color(0xFF7C3AED)
+val PurpleSoft = Color(0xFFEDE7FA)
+val GreenOk = Color(0xFF2FA566)
+val AmberWarn = Color(0xFFE8A317)
+val RedBad = Color(0xFFD64545)
+val CardBg = Color(0xFFFCFAFF)
+val TextMain = Color(0xFF1C1B22)
+val TextSub = Color(0xFF7A7787)
+
+enum class Level(val label: String, val color: Color) {
+    OK("完美", GreenOk), WARN("可疑", AmberWarn), BAD("危险", RedBad)
+}
+data class Check(val title: String, val desc: String, val level: Level, val onClick: (() -> Unit)? = null)
+
+@Composable
+fun App(cfg: Config) {
+    var tab by remember { mutableIntStateOf(0) }
+    val base = LocalDensity.current
+    CompositionLocalProvider(LocalDensity provides Density(base.density * UI_SCALE, base.fontScale)) {
+    MaterialTheme(colorScheme = lightColorScheme(primary = Purple, secondary = Purple, surface = CardBg)) {
+        Box(
+            Modifier.fillMaxSize()
+                .background(Brush.verticalGradient(listOf(Color(0xFFF1ECFC), Color(0xFFE4E2F2))))
+        ) {
+            Column(Modifier.fillMaxSize().statusBarsPadding()) {
+                when (tab) {
+                    0 -> HomeScreen(cfg) { tab = 1 }
+                    1 -> TrialScreen(cfg)
+                    2 -> PromptScreen(cfg)
+                    else -> SettingsScreen(cfg)
+                }
+            }
+            FloatingNav(tab, { tab = it }, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp))
+        }
+    }
+    }
+}
+
+// ================= 公共组件 =================
+@Composable
+fun Header(title: String, sub: String, trailing: @Composable RowScope.() -> Unit = {}) {
+    Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 20.dp, top = 24.dp, bottom = 12.dp), verticalAlignment = Alignment.Top) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 38.sp, fontWeight = FontWeight.Bold, color = TextMain)
+            Spacer(Modifier.height(4.dp))
+            Text(sub, fontSize = 18.sp, fontWeight = FontWeight.Medium, color = Purple)
+        }
+        trailing()
+    }
+}
+
+@Composable
+fun Card(modifier: Modifier = Modifier, border: Color? = null, content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(32.dp), color = CardBg,
+        border = border?.let { BorderStroke(1.5.dp, it) }
+    ) { Column(Modifier.padding(20.dp), content = content) }
+}
+
+@Composable
+fun Pill(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier.clip(RoundedCornerShape(24.dp))
+            .background(if (selected) PurpleSoft else Color.Transparent)
+            .clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) { Text(text, fontSize = 18.sp, color = if (selected) Purple else TextSub, fontWeight = FontWeight.Medium) }
+}
+
+@Composable
+fun FloatingNav(tab: Int, onTab: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val items = listOf("军师" to Icons.Filled.Pets, "试一试" to Icons.Filled.PlayArrow, "提示词" to Icons.Filled.Edit, "设置" to Icons.Filled.Settings)
+    Surface(modifier.shadow(12.dp, RoundedCornerShape(36.dp)), shape = RoundedCornerShape(36.dp), color = CardBg) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            items.forEachIndexed { i, (label, icon) ->
+                val sel = i == tab
+                Column(
+                    Modifier.weight(1f).clip(RoundedCornerShape(26.dp))
+                        .background(if (sel) PurpleSoft else Color.Transparent)
+                        .clickable { onTab(i) }.padding(vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(icon, null, tint = if (sel) Purple else TextSub, modifier = Modifier.size(28.dp))
+                    Text(label, fontSize = 13.sp, color = if (sel) Purple else TextSub, fontWeight = FontWeight.Medium)
+                }
+            }
+        }
+    }
+}
+
+// ================= 首页：状态检测 =================
+@Composable
+fun HomeScreen(cfg: Config, onUltra: () -> Unit) {
+    val ctx = LocalContext.current
+    var d by remember { mutableStateOf(cfg.load()) }
+    var filter by remember { mutableIntStateOf(0) } // 0 全部 1 危险 2 可疑 3 完美
+    val active = ModuleStatus.isActive()
+
+    val checks = listOf(
+        Check("模块激活", if (active) "LSPosed 已加载本模块" else "未激活：请在 LSPosed 启用模块后重启本应用", if (active) Level.OK else Level.BAD),
+        Check(
+            "作用域：微信",
+            if (d.scopeOk) "已确认勾选 com.tencent.mm（点击取消确认）" else "请在 LSPosed 勾选微信并重启微信，然后点击此处确认",
+            if (d.scopeOk) Level.OK else Level.WARN
+        ) { cfg.save(d.copy(scopeOk = !d.scopeOk)); d = cfg.load() },
+        Check("API Key", if (d.apiKey.isBlank()) "未填写，请到「设置」填写" else "已填写（仅存本机）", if (d.apiKey.isBlank()) Level.BAD else Level.OK),
+        Check("接口与模型", "${d.model} · ${d.baseUrl}", if (d.baseUrl.startsWith("http")) Level.OK else Level.BAD),
+        Check(
+            "军师提示词",
+            "${d.prompt.length} 字 · " + if (d.prompt == DEFAULT_PROMPT) "内置精简版" else "自定义",
+            if (d.prompt.length < 50) Level.WARN else Level.OK
+        ),
+        Check("自动分析", if (d.enabled) "进入微信聊天页自动生成候选回复" else "已关闭", if (d.enabled) Level.OK else Level.WARN),
+    )
+    val bad = checks.count { it.level == Level.BAD }
+    val warn = checks.count { it.level == Level.WARN }
+    val ok = checks.count { it.level == Level.OK }
+    val overall = if (bad > 0) Level.BAD else if (warn > 0) Level.WARN else Level.OK
+    val shown = when (filter) { 1 -> checks.filter { it.level == Level.BAD }; 2 -> checks.filter { it.level == Level.WARN }; 3 -> checks.filter { it.level == Level.OK }; else -> checks }
+
+    LazyColumn(contentPadding = PaddingValues(bottom = 130.dp)) {
+        item {
+            Header("狗头军师", "WeChat · 聊天副驾") {
+                IconButton({ d = cfg.load() }, Modifier.padding(top = 8.dp).size(52.dp).clip(CircleShape).background(PurpleSoft)) {
+                    Icon(Icons.Filled.Refresh, null, tint = TextMain)
+                }
+                Spacer(Modifier.width(12.dp))
+                Button(onUltra, Modifier.padding(top = 4.dp).height(60.dp), shape = RoundedCornerShape(24.dp), colors = ButtonDefaults.buttonColors(containerColor = Purple)) {
+                    Icon(Icons.Filled.AutoAwesome, null); Spacer(Modifier.width(6.dp)); Text("试聊", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        item {
+            Card(border = overall.color.copy(alpha = .45f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(84.dp).clip(RoundedCornerShape(26.dp)).background(overall.color), contentAlignment = Alignment.Center) {
+                        Icon(if (overall == Level.OK) Icons.Filled.Check else Icons.Filled.Warning, null, tint = Color.White, modifier = Modifier.size(48.dp))
+                    }
+                    Spacer(Modifier.width(18.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(when (overall) { Level.OK -> "就绪!"; Level.WARN -> "待确认"; else -> "有问题" }, fontSize = 36.sp, fontWeight = FontWeight.Bold, color = overall.color)
+                        Text(when (overall) { Level.OK -> "ALL CLEAR"; Level.WARN -> "NEEDS CHECK"; else -> "ACTION NEEDED" }, fontSize = 16.sp, letterSpacing = 3.sp, color = overall.color, fontWeight = FontWeight.Medium)
+                        Text("${checks.size} 项已检测", fontSize = 16.sp, color = TextSub)
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    when (overall) { Level.OK -> "配置完整，微信聊天页将自动出现候选回复。"; Level.WARN -> "部分项目需要你确认，点下方条目处理。"; else -> "有必需项未通过，模块暂时无法工作。" },
+                    fontSize = 17.sp, color = TextMain
+                )
+                Spacer(Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Stat("${checks.size} 项", "已检测", Modifier.weight(1f))
+                    Stat("$ok 项", "完美", Modifier.weight(1f))
+                    Stat("${bad + warn} 项", "待处理", Modifier.weight(1f))
+                }
+            }
+        }
+        item {
+            Card(Modifier.clickable { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/shengjidaguai-china/goutoujunshi"))) }) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.HelpOutline, null, tint = GreenOk, modifier = Modifier.size(40.dp))
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("需要帮助？查看狗头军师项目", fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                        Text("点击跳转 GitHub 获取完整知识库", fontSize = 15.sp, color = TextSub)
+                    }
+                    Icon(Icons.Filled.OpenInNew, null, tint = TextSub)
+                }
+            }
+        }
+        item {
+            Card {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    listOf("全部 ${checks.size}", "危险 $bad", "可疑 $warn", "完美 $ok").forEachIndexed { i, t ->
+                        Pill(t, filter == i) { filter = i }
+                    }
+                }
+            }
+        }
+        item { Text("检测项目", Modifier.padding(start = 28.dp, top = 12.dp, bottom = 4.dp), fontSize = 20.sp, color = Purple, fontWeight = FontWeight.Medium) }
+        items(shown) { c -> CheckRow(c) }
+    }
+}
+
+@Composable
+fun Stat(big: String, small: String, modifier: Modifier) {
+    Column(modifier.clip(RoundedCornerShape(24.dp)).background(PurpleSoft).padding(vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(big, fontSize = 24.sp, fontWeight = FontWeight.Medium)
+        Text(small, fontSize = 14.sp, color = TextSub)
+    }
+}
+
+@Composable
+fun CheckRow(c: Check) {
+    Surface(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp).clip(RoundedCornerShape(28.dp)).clickable(enabled = c.onClick != null) { c.onClick?.invoke() },
+        shape = RoundedCornerShape(28.dp), color = CardBg
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(64.dp).clip(RoundedCornerShape(20.dp)).background(c.level.color.copy(alpha = .15f)), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(40.dp).clip(CircleShape).background(c.level.color), contentAlignment = Alignment.Center) {
+                    Icon(if (c.level == Level.OK) Icons.Filled.Check else Icons.Filled.PriorityHigh, null, tint = Color.White)
+                }
+            }
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(c.title, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(c.desc, fontSize = 15.sp, color = TextSub, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Text(if (c.level == Level.OK) "通过" else c.level.label, color = c.level.color, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+// ================= 试聊 =================
+@Composable
+fun TrialScreen(cfg: Config) {
+    var text by remember { mutableStateOf("对方: 在吗\n我: 在\n对方: 周末有空吗，想约你吃个饭") }
+    var result by remember { mutableStateOf<Suggestion?>(null) }
+    var err by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val clip = LocalClipboardManager.current
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 130.dp)) {
+        Header("试聊", "粘贴聊天 · 预览回复")
+        Card {
+            OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth().heightIn(min = 140.dp), label = { Text("每行一句，以「我:」或「对方:」开头") })
+            Spacer(Modifier.height(12.dp))
+            Button(
+                {
+                    loading = true; err = null
+                    scope.launch {
+                        try {
+                            val msgs = text.lines().filter { it.isNotBlank() }.map {
+                                val me = it.startsWith("我:") || it.startsWith("我：")
+                                Msg(me, it.substringAfter(':').substringAfter('：').trim().ifEmpty { it })
+                            }
+                            result = withContext(Dispatchers.IO) { Engine.analyze(cfg.load(), msgs) }
+                        } catch (t: Throwable) { err = t.message ?: t.toString() }
+                        loading = false
+                    }
+                },
+                Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(20.dp), enabled = !loading,
+                colors = ButtonDefaults.buttonColors(containerColor = Purple)
+            ) { Text(if (loading) "思考中…" else "生成候选回复", fontSize = 18.sp) }
+        }
+        err?.let { Card(border = RedBad.copy(alpha = .5f)) { Text(it, color = RedBad) } }
+        result?.let { s ->
+            Card {
+                Text("意图：${s.intent}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text("风险：${s.risk}  ${s.note}", fontSize = 15.sp, color = TextSub)
+            }
+            s.replies.forEach { r ->
+                Card(Modifier.clickable { clip.setText(AnnotatedString(r.text)) }) {
+                    Text(r.style, color = Purple, fontWeight = FontWeight.Medium)
+                    Text(r.text, fontSize = 18.sp)
+                    Text("点击复制", fontSize = 12.sp, color = TextSub)
+                }
+            }
+        }
+    }
+}
+
+// ================= 提示词 =================
+@Composable
+fun PromptScreen(cfg: Config) {
+    var d by remember { mutableStateOf(cfg.load()) }
+    var prompt by remember { mutableStateOf(d.prompt) }
+    var saved by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 130.dp)) {
+        Header("提示词", "狗头军师 · 系统提示")
+        Card {
+            Text("可粘贴狗头军师 SKILL.md 的精简版。注意保留「只输出 JSON」的格式要求，否则卡片无法解析。", fontSize = 14.sp, color = TextSub)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(prompt, { prompt = it; saved = false }, Modifier.fillMaxWidth().heightIn(min = 320.dp))
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton({ prompt = DEFAULT_PROMPT; saved = false }, Modifier.weight(1f).height(52.dp), shape = RoundedCornerShape(18.dp)) { Text("恢复默认") }
+                Button({ cfg.save(cfg.load().copy(prompt = prompt)); saved = true }, Modifier.weight(1f).height(52.dp), shape = RoundedCornerShape(18.dp), colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text(if (saved) "已保存" else "保存") }
+            }
+        }
+    }
+}
+
+// ================= 设置 =================
+@Composable
+fun SettingsScreen(cfg: Config) {
+    var d by remember { mutableStateOf(cfg.load()) }
+    var saved by remember { mutableStateOf(false) }
+    fun upd(n: ConfigData) { d = n; saved = false }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 130.dp)) {
+        Header("设置", "接口 · 开关")
+        Card {
+            OutlinedTextField(d.baseUrl, { upd(d.copy(baseUrl = it)) }, Modifier.fillMaxWidth(), label = { Text("接口地址（OpenAI 兼容）") }, singleLine = true)
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(d.apiKey, { upd(d.copy(apiKey = it)) }, Modifier.fillMaxWidth(), label = { Text("API Key") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(d.model, { upd(d.copy(model = it)) }, Modifier.fillMaxWidth(), label = { Text("模型") }, singleLine = true)
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(d.ctx.toString(), { upd(d.copy(ctx = it.toIntOrNull() ?: d.ctx)) }, Modifier.fillMaxWidth(), label = { Text("参考最近几条消息（2-20）") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("微信内自动分析", Modifier.weight(1f), fontSize = 18.sp)
+                Switch(d.enabled, { upd(d.copy(enabled = it)) })
+            }
+            Spacer(Modifier.height(10.dp))
+            Button({ cfg.save(d); saved = true }, Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(20.dp), colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text(if (saved) "已保存" else "保存", fontSize = 18.sp) }
+        }
+        Card {
+            Text("隐私提示", fontWeight = FontWeight.Bold)
+            Text("开启后，微信聊天页最近几条消息会发送到你填写的接口地址。只读取、只填入输入框，不会自动发送。建议先用小号测试。", fontSize = 14.sp, color = TextSub)
+        }
+    }
+}
