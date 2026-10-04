@@ -145,7 +145,7 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
         Check("接口与模型", "${cfg.model} · ${cfg.baseUrl}", if (cfg.baseUrl.startsWith("http")) Level.OK else Level.BAD),
         Check(
             "当前军师",
-            "${if (cfg.skillId == "coder") "程序员搭子" else if (cfg.skillId == "custom") "自定义 skill" else "原版狗头军师"}" +
+            "${skillName(cfg.skillId)}" +
                 " · ${cfg.prompt.length} 字 · " + if (cfg.prompt.contains("replies")) "含 JSON 契约" else "缺少 JSON 契约",
             if (cfg.prompt.length >= 80 && cfg.prompt.contains("replies")) Level.OK else Level.WARN,
         ),
@@ -380,7 +380,11 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
 fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
     val palette = LocalPalette.current
     var cfg by remember { mutableStateOf(store.load()) }
-    var advanced by remember { mutableStateOf(cfg.maxTokens == 0) }
+    // 「新手 / 进阶」以前是用 cfg.maxTokens == 0 推断出来的，会粘住：
+    // 只要进过一次进阶（token 档位被改成无限制），以后每次进来都自动是进阶，切回新手也甩不掉。
+    // 现在改成独立的界面偏好记下来。
+    var advanced by remember { mutableStateOf(cfg.mentorAdvanced) }
+    var tweak by remember { mutableStateOf(false) }
     var text by remember { mutableStateOf(cfg.prompt) }
     var url by remember { mutableStateOf("") }
     var importing by remember { mutableStateOf(false) }
@@ -403,15 +407,22 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GlassPill("新手设置", !advanced, Modifier.weight(1f)) {
                     advanced = false
+                    tweak = false
+                    store.save(store.load().copy(mentorAdvanced = false))
+                    cfg = store.load()
                 }
                 GlassPill("进阶设置", advanced, Modifier.weight(1f)) {
                     advanced = true
-                    if (cfg.maxTokens != 0) {
-                        store.save(store.load().copy(maxTokens = 0))
-                        cfg = store.load()
-                        onSaved()
+                    tweak = false
+                    val wasLimited = cfg.maxTokens != 0
+                    store.save(store.load().copy(maxTokens = 0, mentorAdvanced = true))
+                    cfg = store.load()
+                    onSaved()
+                    dialog = if (wasLimited) {
+                        "已切到进阶设置。\n\n为避免 skill 输出被截断，Token 限制已改为：无限制。"
+                    } else {
+                        "已切到进阶设置。"
                     }
-                    dialog = "已切到进阶设置。\n\n为避免 skill 输出被截断，Token 限制已改为：无限制。"
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -468,6 +479,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                                 store.save(store.load().copy(prompt = skill.prompt, skillId = skill.id, maxTokens = 0))
                                 cfg = store.load()
                                 text = cfg.prompt
+                                tweak = false
                                 saved = true
                                 onSaved()
                                 dialog = "已启用「${skill.name}」。\n\nToken 限制已改为：无限制。"
@@ -530,26 +542,40 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                     Text(it, fontSize = 12.sp, color = if (it.startsWith("导入成功")) palette.ok else palette.bad)
                 }
             }
+            // 这块以前是一整屏的提示词输入框，长得跟上面「新手设置」几乎一模一样 ——
+            // 切到进阶后往下滑，会以为新手的内容没关掉。现在默认收起，要看再点开。
             GlassCard(glassAlpha) {
-                Text("当前提示词（可微调）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
-                Text(
-                    if (text.contains("replies")) "✓ 含 JSON 输出契约 · ${text.length} 字" else "⚠ 缺少 JSON 契约",
-                    fontSize = 12.sp,
-                    color = if (text.contains("replies")) palette.ok else palette.warn,
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it; saved = false },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp),
-                )
-                Spacer(Modifier.height(10.dp))
-                Button(
-                    onClick = { persist(text, if (cfg.skillId == "classic") "classic" else "custom", unlimited = true) },
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-                ) { Text(if (saved) "已保存" else "保存") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("当前军师", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                        Text(
+                            "${skillName(cfg.skillId)} · ${text.length} 字 · " +
+                                if (text.contains("replies")) "含 JSON 契约" else "⚠ 缺少 JSON 契约",
+                            fontSize = 12.sp,
+                            color = if (text.contains("replies")) palette.sub else palette.warn,
+                        )
+                    }
+                    TextButton(onClick = { tweak = !tweak }) { Text(if (tweak) "收起" else "微调提示词") }
+                }
+                if (tweak) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it; saved = false },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp),
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            // 内容跟哪个内置 skill 逐字一样，就还算那个 skill；动过了才算「自定义」
+                            val known = BUILT_IN_SKILLS.firstOrNull { it.prompt == text }?.id
+                            persist(text, known ?: "custom", unlimited = true)
+                        },
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                    ) { Text(if (saved) "已保存" else "保存") }
+                }
             }
         }
     }

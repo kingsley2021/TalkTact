@@ -33,6 +33,7 @@ object Keys {
     const val BG_URI = "bg_uri"
     const val BG_DIM = "bg_dim"
     const val SKILL = "skill_id"
+    const val MENTOR_ADV = "mentor_adv"
 }
 
 data class ConfigData(
@@ -60,6 +61,8 @@ data class ConfigData(
     val bgDim: Float = 0.30f,
     /** 当前选中的 skill：classic / coder / custom */
     val skillId: String = "classic",
+    /** 「军师」页停在进阶视图。以前是用 maxTokens==0 猜的，会粘住，改成独立记住 */
+    val mentorAdvanced: Boolean = false,
 ) {
     companion object {
         /** 老版本存过的 max_tokens 不在四档里（比如 500），归一化到最近的档，免得设置页四档都没选中。 */
@@ -83,6 +86,7 @@ data class ConfigData(
             bgUri = p.getString(Keys.BG_URI, "").orEmpty(),
             bgDim = p.getFloat(Keys.BG_DIM, 0.30f).coerceIn(0f, 0.8f),
             skillId = p.getString(Keys.SKILL, "classic").orEmpty().ifBlank { "classic" },
+            mentorAdvanced = p.getBoolean(Keys.MENTOR_ADV, false),
             temperature = p.getFloat(Keys.TEMPERATURE, 0.8f).toDouble(),
             maxTokens = snapTier(p.getInt(Keys.MAX_TOKENS, 400)),
             minIntervalSec = p.getInt(Keys.MIN_INTERVAL, 15).coerceIn(0, 600),
@@ -126,6 +130,7 @@ class ConfigStore(context: Context) {
             .putString(Keys.BG_URI, d.bgUri)
             .putFloat(Keys.BG_DIM, d.bgDim.coerceIn(0f, 0.8f))
             .putString(Keys.SKILL, d.skillId)
+            .putBoolean(Keys.MENTOR_ADV, d.mentorAdvanced)
             .apply()
     }
 

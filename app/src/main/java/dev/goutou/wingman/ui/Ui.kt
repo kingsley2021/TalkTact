@@ -423,6 +423,13 @@ fun StatCell(big: String, small: String, modifier: Modifier = Modifier) {
 
 enum class Health(val label: String) { OK("就绪"), WARN("待确认"), BAD("有问题") }
 
+/** skillId → 给人看的名字。运行状态页和军师页共用，别再各写一份 if-else。 */
+fun skillName(id: String): String = when (id) {
+    "coder" -> "程序员搭子"
+    "custom" -> "自定义 skill"
+    else -> "原版狗头军师"
+}
+
 /** 顶栏那个小圆点/勾叉就靠它：模块激活 + Key + （心跳或手动确认）。 */
 fun healthOf(store: ConfigStore): Health {
     val active = ModuleStatus.isActive()
