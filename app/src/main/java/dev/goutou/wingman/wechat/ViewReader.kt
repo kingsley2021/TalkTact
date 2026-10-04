@@ -378,10 +378,12 @@ internal class ViewReader(private val a: Activity) {
     private fun looksLikeViewDump(s: String): Boolean {
         val t = s.trim()
         if (t.isEmpty()) return false
-        if (CLASS_NAME_RE.matches(t)) return true
-        if (VIEW_DUMP_RE.containsMatchIn(t)) return true
+        if (FQN_RE.matches(t)) return true
+        // "android.widget.LinearLayout{...}" 这种：去掉 {...} 之后再看一眼前半段
         val head = t.substringBefore('{').trim()
-        return head.length >= 8 && head.contains('.') && CLASS_NAME_RE.matches(head)
+        if (head.length < t.length && head.length >= 8 && FQN_RE.matches(head)) return true
+        // 兜底：框架包名开头的一律不是聊天内容
+        return FRAMEWORK_PREFIXES.any { t.startsWith(it) }
     }
 
     /**
@@ -646,11 +648,19 @@ internal class ViewReader(private val a: Activity) {
             "getHint",
         )
 
-        /** `android.widget.TextView` 这种：每段都是合法标识符、末段首字母大写。 */
-        val CLASS_NAME_RE = Regex("^([a-zA-Z_$][a-zA-Z0-9_$]*\\.)+[A-Z][a-zA-Z0-9_$]*$")
+        /**
+         * `android.widget.TextView` 这种：全是点分标识符、末段首字母大写。
+         * 刻意不把 `$` 写进字符类 —— 在 Kotlin 字符串里它是模板起始符，容易出幺蛾子，
+         * 而带 `$` 的内部类名字符串还有 FRAMEWORK_PREFIXES 那条兜底。
+         */
+        // matches() 本身就是整串匹配，不用 ^ / $ 锚点（也避开 Kotlin 字符串里的 $ 模板歧义）
+        val FQN_RE = Regex("([A-Za-z_][A-Za-z0-9_]*\\.)+[A-Z][A-Za-z0-9_]*")
 
-        /** `android.widget.LinearLayout{...}` 这种。 */
-        val VIEW_DUMP_RE = Regex("^([a-zA-Z_$][a-zA-Z0-9_$]*\\.)+[A-Za-z0-9_$]*\\{")
+        /** 这些包名开头的一律不是聊天内容。 */
+        val FRAMEWORK_PREFIXES = listOf(
+            "android.", "androidx.", "java.", "javax.", "kotlin.", "dalvik.",
+            "com.tencent.", "com.android.", "com.google.android.",
+        )
 
         /** 纯 UI 文案的无障碍描述，不当消息正文。 */
         val UI_WORDS = setOf(
