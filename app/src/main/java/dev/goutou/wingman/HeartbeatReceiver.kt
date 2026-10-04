@@ -14,13 +14,13 @@ import dev.goutou.wingman.config.PREF_NAME
  * 这件事得用广播传回来。首页的「微信内已生效」因此是真检测，而不是原版那种「请你自己点一下确认」。
  */
 object Heartbeat {
-    const val ACTION = "dev.goutou.wingman.HEARTBEAT"
+    const val ACTION = "io.github.shibry88_netizen.talktact.HEARTBEAT"
 
     /**
      * 接收方必须持有该权限，发送方（微信进程）不需要任何权限 ——
      * 正好绕开「不能给微信加权限」这个限制。
      */
-    const val PERMISSION = "dev.goutou.wingman.permission.HEARTBEAT"
+    const val PERMISSION = "io.github.shibry88_netizen.talktact.permission.HEARTBEAT"
 
     fun send(
         context: Context,

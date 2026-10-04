@@ -8,11 +8,11 @@ android {
     namespace = "dev.goutou.wingman"
     compileSdk = 34
     defaultConfig {
-        applicationId = "dev.goutou.wingman"
+        applicationId = "io.github.shibry88_netizen.talktact"
         minSdk = 31  // Android 12+：液态玻璃的真实背景模糊走 RenderEffect
         targetSdk = 34
-        versionCode = 20
-        versionName = "0.5.3"
+        versionCode = 21
+        versionName = "0.6.0"
     }
     buildTypes {
         release { isMinifyEnabled = false }

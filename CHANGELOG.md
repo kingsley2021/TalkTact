@@ -1,5 +1,23 @@
 # 变更记录
 
+## v0.6.0
+
+**改 applicationId：`dev.goutou.wingman` → `io.github.shibry88_netizen.talktact`**
+
+原因：上 LSPosed 官方模块库要求包名可验证（反向域名得是你自己拥有的域名，或在根域放 TXT 记录）。
+`dev.goutou` 不属于你，机器人直接判 invalid 并给了替代写法 —— 把用户名里的 `-` 换成 `_`。
+
+- **Kotlin 包名（namespace）保持不变**，还是 `dev.goutou.wingman`，所有源码一行没动，
+  只改了 `applicationId` 和 `MODULE_PKG` 常量。顺手把这两者的区别写成了注释，
+  免得以后改一处漏一处。
+- 顺带修了一个隐藏 bug：`WeChatHook.hookSelf()` 里用的是 `"$MODULE_PKG.ModuleStatus"`
+  去找自己的类 —— 一旦 applicationId ≠ Kotlin 包名，这行就指向了一个不存在的类。
+  现在拆成独立的 `NAMESPACE` 常量。
+- 心跳的广播 action 和自定义权限也跟着换成新前缀，免得新旧两个包同时装着时互相干扰。
+- **代价**：换了 applicationId 等于换了一个应用 —— LSPosed 里要重新启用、重勾作用域，
+  数据目录是新的。所以配套有了 v0.5.3 的导出 / 导入：旧包导出，新包导入即可。
+
+
 ## v0.5.3
 
 **新增：配置导出 / 导入（为换包名做准备）**

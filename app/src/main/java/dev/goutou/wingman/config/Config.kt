@@ -4,7 +4,18 @@ import android.content.Context
 import android.content.SharedPreferences
 import dev.goutou.wingman.llm.DEFAULT_PROMPT
 
-const val MODULE_PKG = "dev.goutou.wingman"
+/**
+ * 装到系统里的包名（= build.gradle 里的 applicationId）。
+ *
+ * 注意它和 [NAMESPACE] 是**两回事**：namespace 是 Kotlin 包名 / R 类所在的位置，
+ * 一直没变；applicationId 为了上 LSPosed 官方模块库（要求包名可验证）改成了
+ * io.github.shibry88_netizen.talktact。
+ * 用到类名的地方（比如 hook 自己）必须用 NAMESPACE，别用这个。
+ */
+const val MODULE_PKG = "io.github.shibry88_netizen.talktact"
+
+/** Kotlin 包名。类名、R 类都在这儿，改名要动整个源码树，所以刻意保持不变。 */
+const val NAMESPACE = "dev.goutou.wingman"
 const val PREF_NAME = "cfg"
 const val DEFAULT_BASE = "https://api.openai.com/v1"
 const val DEFAULT_MODEL = "gpt-4o-mini"

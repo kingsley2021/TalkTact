@@ -32,7 +32,7 @@ gradle :app:assembleDebug       # 产出 app/build/outputs/apk/debug/app-debug.a
 
 ## 安装
 
-1. 装 APK → LSPosed「模块」里启用「TalkTact」→ **作用域勾选微信** → 强杀微信重开。
+1. 装 APK（包名 `io.github.shibry88_netizen.talktact`）→ LSPosed「模块」里启用「TalkTact」→ **作用域勾选微信** → 强杀微信重开。
 2. 打开本 App：「设置」填接口地址（OpenAI 兼容，写到 `/v1`）、API Key、模型。
 3. 回首页点「接口自检」——真发一次最小请求，确认地址/Key/模型都对。
 4. 到微信里打开一个聊天，顶部会出现候选回复卡片。

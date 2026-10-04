@@ -10,6 +10,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 import de.robv.android.xposed.XSharedPreferences
 import dev.goutou.wingman.config.Keys
 import dev.goutou.wingman.config.MODULE_PKG
+import dev.goutou.wingman.config.NAMESPACE
 import dev.goutou.wingman.config.PREF_NAME
 
 /**
@@ -31,7 +32,7 @@ class WeChatHook : IXposedHookLoadPackage {
     private fun hookSelf(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             XposedHelpers.findAndHookMethod(
-                "$MODULE_PKG.ModuleStatus",
+                "$NAMESPACE.ModuleStatus",
                 lpparam.classLoader,
                 "isActive",
                 XC_MethodReplacement.returnConstant(true),

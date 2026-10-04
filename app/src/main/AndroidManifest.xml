@@ -8,8 +8,8 @@
       protectionLevel=normal + App 自己 uses 一下，就满足 sendBroadcast(intent, receiverPermission)
       对接收方的权限要求；微信进程不需要持有任何权限，也就没给它加权限。
     -->
-    <permission android:name="dev.goutou.wingman.permission.HEARTBEAT" android:protectionLevel="normal" />
-    <uses-permission android:name="dev.goutou.wingman.permission.HEARTBEAT" />
+    <permission android:name="io.github.shibry88_netizen.talktact.permission.HEARTBEAT" android:protectionLevel="normal" />
+    <uses-permission android:name="io.github.shibry88_netizen.talktact.permission.HEARTBEAT" />
 
     <application
         android:label="TalkTact"
@@ -35,7 +35,7 @@
 
         <receiver android:name=".HeartbeatReceiver" android:exported="true">
             <intent-filter>
-                <action android:name="dev.goutou.wingman.HEARTBEAT" />
+                <action android:name="io.github.shibry88_netizen.talktact.HEARTBEAT" />
             </intent-filter>
         </receiver>
     </application>
