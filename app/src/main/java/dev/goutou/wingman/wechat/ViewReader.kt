@@ -12,6 +12,7 @@ import android.view.ViewGroup
 import android.widget.AbsListView
 import android.widget.EditText
 import android.widget.ImageView
+import android.widget.ScrollView
 import android.widget.TextView
 import java.util.WeakHashMap
 import kotlin.math.abs
@@ -56,16 +57,116 @@ internal class ViewReader(private val a: Activity) {
         return best
     }
 
-    fun findList(root: View): ViewGroup? {
-        var hit: ViewGroup? = null
+    /**
+     * 选「消息列表」。这是最容易出错的一步，所以规则写得啰嗦一点。
+     *
+     * v0.2.0（以及 v0.1）取的是深度优先遇到的**第一个** AbsListView/RecyclerView，
+     * 完全不看它在屏幕的什么位置 —— 于是很容易选中输入框下方那个表情/更多功能的宫格：
+     * 它也是 AbsListView，每一格都是 ImageView，加起来就是「读到的全是图片」。
+     *
+     * 现在以输入框为锚点，只接受同时满足这几条的容器：
+     * 在屏幕上 / 完全位于输入框上方 / 高度不小于屏幕 22% / 至少 2 个子视图（避免选到只包一层的壳）。
+     * 多个候选取面积最大的。
+     */
+    fun findList(root: View, input: View?): ViewGroup? {
+        val inputTop = input?.let { topOf(it) } ?: height
+        val candidates = ArrayList<ViewGroup>()
+        val rejected = ArrayList<String>()
+
         walk(root) { v ->
-            if (hit == null && v is ViewGroup && v.isShown && v.childCount >= 1 &&
-                (v is AbsListView || v.javaClass.name.contains("RecyclerView"))
-            ) {
-                hit = v
+            if (v !is ViewGroup || !v.isShown) return@walk
+            val w = v.width
+            val h = v.height
+            if (w <= 0 || h <= 0) return@walk
+            val loc = IntArray(2)
+            v.getLocationOnScreen(loc)
+            val top = loc[1]
+            val bottom = top + h
+
+            val looksList = v is AbsListView || v is ScrollView ||
+                v.javaClass.name.contains("RecyclerView") ||
+                v.javaClass.name.contains("ListView") ||
+                v.javaClass.name.contains("ScrollView") ||
+                v.canScrollVertically(1) || v.canScrollVertically(-1)
+            if (!looksList) return@walk
+
+            val onScreen = loc[0] < width && loc[0] + w > 0 && bottom > 0 && top < height
+            val aboveInput = bottom <= inputTop + dp(8)
+            val tallEnough = h >= height * 0.22
+            val multiChild = v.childCount >= 2
+
+            if (onScreen && aboveInput && tallEnough && multiChild) {
+                candidates.add(v)
+            } else {
+                rejected.add(
+                    describe(v) + " [" +
+                        (if (!onScreen) "不在屏幕上 " else "") +
+                        (if (!aboveInput) "伸到输入框下方 " else "") +
+                        (if (!tallEnough) "太矮 " else "") +
+                        (if (!multiChild) "子视图<2 " else "") + "]",
+                )
             }
         }
-        return hit
+
+        lastCandidates = "入选=${candidates.size}；排除=${rejected.take(6).joinToString(" / ").ifEmpty { "无" }}"
+        return candidates.maxWithOrNull(compareBy({ it.width.toLong() * it.height }, { it.childCount }))
+    }
+
+    /** 上一次 findList 的候选情况，只用于诊断输出。 */
+    var lastCandidates: String = "（还没找过）"
+        private set
+
+    /**
+     * 结构快照：真机上「为什么读不到 / 为什么全是图片」靠它定位，不用猜。
+     * 会写进 LSPosed 日志，同时广播回 App 首页，可以直接复制发出来。
+     */
+    fun diagnose(root: View, list: ViewGroup?, input: View?, rowCount: Int = 3): String {
+        val sb = StringBuilder()
+        sb.append("DIAG 屏=").append(width).append('x').append(height)
+            .append(" dp=").append(density).append(" 夜间=").append(night).append('
+')
+        sb.append("输入框: ").append(input?.let { describe(it) } ?: "未找到").append('
+')
+        sb.append("消息列表: ").append(list?.let { describe(it) } ?: "未找到").append('
+')
+        sb.append("候选列表: ").append(lastCandidates).append('
+')
+        if (list != null) {
+            for (i in 0 until minOf(rowCount, list.childCount)) {
+                val row = list.getChildAt(i)
+                sb.append("  行").append(i).append(' ').append(describe(row)).append('
+')
+                val parts = ArrayList<String>(6)
+                walk(row) { v ->
+                    when {
+                        v is ImageView && v.width >= dp(20) ->
+                            parts.add("IMG ${v.width}x${v.height}@x${leftOf(v)}")
+                        v is TextView && v !is EditText -> {
+                            val t = v.text?.toString()?.trim().orEmpty()
+                            if (t.isNotEmpty()) {
+                                val hit = bubbleOf(v, row)
+                                parts.add("TXT\"${t.take(16)}\" ${v.width}x${v.height}@x${leftOf(v)} 气泡=${hit?.side ?: "无"}")
+                            }
+                        }
+                    }
+                }
+                if (parts.isNotEmpty()) sb.append("      ").append(parts.take(6).joinToString(" | ")).append('
+')
+            }
+        }
+        return sb.toString().take(1800)
+    }
+
+    private fun describe(v: View): String {
+        val loc = IntArray(2)
+        v.getLocationOnScreen(loc)
+        return "${v.javaClass.simpleName} ${v.width}x${v.height}@${loc[0]},${loc[1]} 子=${v.childCount}"
+    }
+
+    private fun leftOf(v: View): Int {
+        val loc = IntArray(2)
+        v.getLocationOnScreen(loc)
+        return loc[0]
     }
 
     /**
@@ -159,7 +260,6 @@ internal class ViewReader(private val a: Activity) {
     private fun fallbackBubble(nodes: List<Pair<TextNode, BubbleHit?>>, avatars: List<AvatarNode>): Bubble? {
         val best = nodes.map { it.first }
             .filter { it.kind == Kind.OTHER }
-            .filter { it.text.length in 1..120 }
             .maxByOrNull { it.text.length }
         if (best != null) return Bubble(best.text, Side.UNKNOWN, null, best.top)
         val avatar = avatars.minByOrNull { it.top } ?: return null

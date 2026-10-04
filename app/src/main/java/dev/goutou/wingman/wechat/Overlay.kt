@@ -146,6 +146,12 @@ internal class Panel(private val a: Activity) {
         }
         title.textSize = 13f
         title.setTextColor(colorAccent)
+        // 长按标题：把当前 View 树结构写成诊断（App 首页可复制，日志里也有一份）
+        title.setOnLongClickListener {
+            a.window?.decorView?.let { decor -> dumpDiagnosis(decor, listRef, inputRef, "手动诊断") }
+            toast("诊断已写入：App 首页「诊断」卡片可复制，或看 LSPosed 日志 [Goutou]")
+            true
+        }
         val refresh = label("↻ 重新识别", 12f, 0xFFFFFFFF.toInt()) {
             background = roundRect(colorAccent, 14)
             setPadding(dp(10), dp(4), dp(10), dp(4))
@@ -258,7 +264,7 @@ internal class Panel(private val a: Activity) {
         val list = if (cachedList != null && cachedList.isShown) {
             cachedList
         } else {
-            reader.findList(decor)?.also { listRef = it }
+            reader.findList(decor, input)?.also { listRef = it }
         }
         place(list)
         if (list == null) {
@@ -281,6 +287,17 @@ internal class Panel(private val a: Activity) {
         val msgs = parser.parse(reader.snapshot(list)).takeLast(cfg.ctx)
         if (msgs.isEmpty()) {
             showCard(false)
+            return
+        }
+        // 安全网：一条文字都没读到，说明「读的东西」本身就不对。
+        // 这时候去调模型只会浪费 token 并给出荒谬建议，所以先停下、留诊断、明确告诉用户。
+        if (msgs.size >= 2 && msgs.all { it.attachment }) {
+            dumpDiagnosis(decor, list, input, "读到 ${msgs.size} 条消息，但全部是图片/表情占位，一条文字都没有")
+            showMessage(
+                "读到的全是图片占位、一条文字都没有 —— 多半是消息列表选错了。\n" +
+                    "诊断已写入 App 首页「诊断」卡片，长按标题也能重新生成。",
+                isError = true,
+            )
             return
         }
         // 最后一条是我发的：没什么可回的，收起来不打扰
@@ -307,6 +324,16 @@ internal class Panel(private val a: Activity) {
             return
         }
         ask(cfg, msgs, fingerprint)
+    }
+
+    private fun dumpDiagnosis(decor: View, list: ViewGroup?, input: View?, why: String) {
+        try {
+            val diag = "$why\n" + reader.diagnose(decor, list, input)
+            XposedBridge.log("[Goutou] $diag")
+            Heartbeat.send(a, 0, diag)
+        } catch (t: Throwable) {
+            XposedBridge.log("[Goutou] 生成诊断失败: $t")
+        }
     }
 
     private fun reloadConfig(): Boolean {

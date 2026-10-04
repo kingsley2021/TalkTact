@@ -57,14 +57,18 @@ import kotlinx.coroutines.withContext
 @Composable
 fun HomeScreen(store: ConfigStore, onTrial: () -> Unit) {
     val palette = LocalPalette.current
+    var tick by remember { mutableStateOf(0) }
     var cfg by remember { mutableStateOf(store.load()) }
-    var usage by remember { mutableStateOf(store.usage()) }
-    var beat by remember { mutableStateOf(store.heartbeatAt()) }
+    var usage by remember(tick) { mutableStateOf(store.usage()) }
+    var beat by remember(tick) { mutableStateOf(store.heartbeatAt()) }
+    val diag = remember(tick) { store.diag() }
+    val diagAt = remember(tick) { store.diagAt() }
     var probeResult by remember { mutableStateOf<String?>(null) }
     var probeOk by remember { mutableStateOf(false) }
     var probing by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
     val active = ModuleStatus.isActive()
     val heartbeatFresh = beat > 0 && System.currentTimeMillis() - beat < 6 * 3600_000L
     val confirmed = store.scopeConfirmed()
@@ -126,7 +130,8 @@ fun HomeScreen(store: ConfigStore, onTrial: () -> Unit) {
 
     LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
         item {
-            ScreenHeader("狗头军师", "WeChat · 聊天副驾 v0.2") {
+            ScreenHeader("狗头军师", "WeChat · 聊天副驾 v0.2.1") {
+                TextButton(onClick = { tick++ }) { Text("刷新") }
                 Button(
                     onClick = onTrial,
                     shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
@@ -192,6 +197,25 @@ fun HomeScreen(store: ConfigStore, onTrial: () -> Unit) {
                     ) { Text(if (probing) "测试中…" else "开始自检") }
                     Spacer(Modifier.width(12.dp))
                     Text(probeResult ?: "", fontSize = 12.sp, color = if (probeOk) palette.ok else palette.bad)
+                }
+            }
+        }
+        if (diag.isNotBlank()) {
+            item {
+                SectionCard(border = palette.warn) {
+                    Text("诊断（来自微信进程）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                    Text(
+                        "生成于 ${formatTime(diagAt)} · 排查「读不到消息 / 全是图片」时把它复制给对方",
+                        fontSize = 12.sp,
+                        color = palette.sub,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(diag, fontSize = 10.sp, color = palette.text)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { clipboard.setText(AnnotatedString(diag)) },
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                    ) { Text("复制诊断") }
                 }
             }
         }

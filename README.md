@@ -68,6 +68,9 @@ Activity.onResume ──► Panel（每个 Activity 一个）
 ## 调试
 
 - LSPosed 日志里过滤 `[Goutou]`。
+- **「读取」里全是 `[图片/表情/语音]`**：说明消息列表选错了（比如选中了表情/更多功能宫格），
+  或者你的微信版本里消息文字不是普通 `TextView`。
+  **长按卡片标题** → App 首页会出现「诊断」卡片，复制出来即可定位。选列表的逻辑在 `ViewReader.findList()`。
 - **读不到消息**：多半是气泡容器识别失败。到 `ViewReader.bubbleOf()` 里看那三个条件
   （`widthRatio < 0.92`、背景像不像气泡、和页面底色差多少），把日志加上打印实际值即可。
 - **认不出图片/表情**：`ViewReader.readRow()` 里头像尺寸范围 `dp(24)..dp(84)`。

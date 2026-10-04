@@ -25,6 +25,8 @@ object Keys {
     const val HEARTBEAT = "heartbeat_at"
     const val CALLS = "stat_calls"
     const val TOKENS = "stat_tokens"
+    const val DIAG = "diag"
+    const val DIAG_AT = "diag_at"
 }
 
 data class ConfigData(
@@ -101,6 +103,11 @@ class ConfigStore(context: Context) {
     }
 
     fun heartbeatAt(): Long = sp.getLong(Keys.HEARTBEAT, 0L)
+
+    /** 微信进程最近一次写回来的结构诊断（排查「读不到消息」用）。 */
+    fun diag(): String = sp.getString(Keys.DIAG, "").orEmpty()
+
+    fun diagAt(): Long = sp.getLong(Keys.DIAG_AT, 0L)
 
     fun scopeConfirmed(): Boolean = sp.getBoolean(Keys.SCOPE_OK, false)
 
