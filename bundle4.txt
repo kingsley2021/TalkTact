@@ -1,0 +1,289 @@
+#### FILE: app/src/main/java/dev/goutou/wingman/Overlay.kt
+package dev.goutou.wingman
+
+import android.app.Activity
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.NinePatchDrawable
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.AbsListView
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
+import de.robv.android.xposed.XSharedPreferences
+import de.robv.android.xposed.XposedBridge
+import java.util.WeakHashMap
+
+object Overlay {
+    private val map = WeakHashMap<Activity, Panel>()
+    fun attach(a: Activity) {
+        if (map.containsKey(a)) return
+        val p = Panel(a)
+        map[a] = p
+        p.install()
+    }
+}
+
+/** 聊天页顶部的候选回复卡片。只在真正的聊天页出现；只读白色(对方)/绿色(我)气泡；只填输入框，不自动发送。 */
+class Panel(private val a: Activity) {
+    private val h = Handler(Looper.getMainLooper())
+    private val card = LinearLayout(a)
+    private val title = TextView(a)
+    private val body = LinearLayout(a)
+    private val chip = TextView(a)
+    private val prefs = XSharedPreferences(MODULE_PKG, PREF_NAME)
+    private var lastKey = ""
+    private var dismissedKey = ""
+    private var onChat = false
+    @Volatile private var busy = false
+    @Volatile private var force = false
+    private val d = a.resources.displayMetrics.density
+    private fun dp(x: Int) = (x * d).toInt()
+
+    private val tick = object : Runnable {
+        override fun run() {
+            if (a.isFinishing || a.isDestroyed) return
+            try { scan() } catch (t: Throwable) { XposedBridge.log(t) }
+            h.postDelayed(this, 1500)
+        }
+    }
+
+    fun install() {
+        card.orientation = LinearLayout.VERTICAL
+        card.background = GradientDrawable().apply {
+            cornerRadius = dp(22).toFloat(); setColor(0xF5FFFFFF.toInt()); setStroke(dp(1), 0x667C3AED)
+        }
+        card.setPadding(dp(14), dp(10), dp(14), dp(10))
+        card.elevation = dp(8).toFloat()
+        card.visibility = View.GONE
+
+        val head = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        title.setTextColor(0xFF7C3AED.toInt()); title.textSize = 13f
+        val refresh = TextView(a).apply {
+            text = "↻ 重新识别"; textSize = 12f; setTextColor(0xFFFFFFFF.toInt())
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            background = GradientDrawable().apply { cornerRadius = dp(14).toFloat(); setColor(0xFF7C3AED.toInt()) }
+            setOnClickListener { requestRefresh() }
+        }
+        val close = TextView(a).apply { text = "✕"; textSize = 14f; setTextColor(0xFF888888.toInt()); setPadding(dp(12), 0, 0, 0) }
+        close.setOnClickListener { dismissedKey = lastKey; hideCard() }
+        head.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        head.addView(refresh)
+        head.addView(close)
+        body.orientation = LinearLayout.VERTICAL
+        card.addView(head)
+        card.addView(body)
+
+        chip.apply {
+            text = "↻ 识别"; textSize = 12f; setTextColor(0xFFFFFFFF.toInt())
+            setPadding(dp(12), dp(6), dp(12), dp(6)); elevation = dp(6).toFloat()
+            background = GradientDrawable().apply { cornerRadius = dp(16).toFloat(); setColor(0xE67C3AED.toInt()) }
+            visibility = View.GONE
+            setOnClickListener { requestRefresh() }
+        }
+
+        val decor = a.window.decorView as ViewGroup
+        val lp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP)
+        lp.setMargins(dp(10), dp(96), dp(10), 0) // 顶部偏移：避开状态栏+标题栏，按机型调
+        decor.addView(card, lp)
+        val lp2 = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END)
+        lp2.setMargins(0, dp(96), dp(10), 0)
+        decor.addView(chip, lp2)
+        h.postDelayed(tick, 1500)
+    }
+
+    private fun requestRefresh() {
+        force = true; lastKey = ""; dismissedKey = ""
+        try { scan() } catch (t: Throwable) { XposedBridge.log(t) }
+    }
+
+    private fun hideCard() { card.visibility = View.GONE; chip.visibility = if (onChat) View.VISIBLE else View.GONE }
+    private fun showCard() { card.visibility = View.VISIBLE; chip.visibility = View.GONE }
+    private fun hideAll() { onChat = false; card.visibility = View.GONE; chip.visibility = View.GONE }
+
+    private fun scan() {
+        val decor = a.window.decorView
+        if (!decor.hasWindowFocus()) return
+        // 只在真正的聊天页工作：底部要有输入框。首页/会话列表(含置顶聊天)不会出现卡片，也不会挡住点击
+        val input = chatInput(decor)
+        if (input == null) { hideAll(); return }
+        if (!prefs.file.canRead()) { onChat = true; show("配置读取失败：请确认模块已在 LSPosed 启用且勾选了微信"); return }
+        prefs.reload()
+        val cfg = ConfigData.from(prefs)
+        if (!cfg.enabled) { hideAll(); return }
+        onChat = true
+
+        val f = force; force = false
+        val list = findList(decor)
+        if (list == null) { if (f) show("没找到聊天列表") else hideCard(); return }
+        val msgs = readRows(list).takeLast(cfg.ctx)
+        if (msgs.isEmpty()) { if (f) show("没读到白色/绿色气泡里的文字") else hideCard(); return }
+        if (!f && msgs.last().fromMe) { hideCard(); return }
+
+        val key = msgs.joinToString("|") { (if (it.fromMe) "M" else "O") + it.text }
+        if (busy) return
+        if (!f && (key == dismissedKey || key == lastKey)) return
+        lastKey = key
+        busy = true
+        show("狗头军师思考中…")
+        Thread {
+            try {
+                val s = Engine.analyze(cfg, msgs)
+                h.post { render(s, msgs) }
+            } catch (t: Throwable) {
+                h.post { show("生成失败：${t.message}（点“重新识别”重试）") }
+            } finally { busy = false }
+        }.start()
+    }
+
+    private fun show(t: String) {
+        title.text = t; body.removeAllViews(); showCard()
+    }
+
+    private fun render(s: Suggestion, msgs: List<Msg>) {
+        title.text = "狗头军师 · ${s.intent} · 风险${s.risk}"
+        body.removeAllViews()
+        body.addView(TextView(a).apply {
+            text = "读取：" + msgs.takeLast(3).joinToString(" ‖ ") {
+                (if (it.fromMe) "我" else "对方" + (if (it.who.isNotBlank()) "(${it.who})" else "")) + ":" + it.text.take(16)
+            }
+            textSize = 10f; setTextColor(0xFF999999.toInt()); setPadding(0, dp(2), 0, dp(2))
+        })
+        if (s.note.isNotBlank()) body.addView(TextView(a).apply {
+            text = s.note; textSize = 12f; setTextColor(0xFF666666.toInt()); setPadding(0, dp(4), 0, dp(2))
+        })
+        for (r in s.replies.take(3)) {
+            val tv = TextView(a).apply {
+                text = "${r.style}｜${r.text}"; textSize = 14f; setTextColor(0xFF222222.toInt())
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                background = GradientDrawable().apply { cornerRadius = dp(14).toFloat(); setColor(0xFFEDE7FA.toInt()) }
+                setOnClickListener { fill(r.text) }
+            }
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(6)
+            body.addView(tv, lp)
+        }
+        showCard()
+    }
+
+    private fun fill(text: String) {
+        val et = chatInput(a.window.decorView) ?: return
+        et.setText(text); et.setSelection(text.length); et.requestFocus()
+    }
+
+    // ---------- 读取聊天 ----------
+    private fun findEdit(v: View): EditText? {
+        if (v is EditText && v.isShown) return v
+        if (v is ViewGroup) for (i in 0 until v.childCount) findEdit(v.getChildAt(i))?.let { return it }
+        return null
+    }
+
+    /** 聊天输入框：必须在屏幕偏下的位置（排除顶部搜索框） */
+    private fun chatInput(decor: View): EditText? {
+        val et = findEdit(decor) ?: return null
+        val loc = IntArray(2); et.getLocationOnScreen(loc)
+        return if (loc[1] > a.resources.displayMetrics.heightPixels * 0.35) et else null
+    }
+
+    private fun findList(v: View): ViewGroup? {
+        if (v is ViewGroup) {
+            if ((v is AbsListView || v.javaClass.name.contains("RecyclerView")) && v.isShown && v.childCount > 1) return v
+            for (i in 0 until v.childCount) findList(v.getChildAt(i))?.let { return it }
+        }
+        return null
+    }
+
+    private val noise = Regex("""^\d+\s*["'″′”“]*$""")
+    private val timeRe = Regex("""^((昨天|今天|星期.|周.|\d{4}[年/]\S*)?\s*\d{1,2}[:：]\d{2}(:\d{2})?.*|\d{1,2}月\d{1,2}日.*)$""")
+    private val tags = setOf("成员", "群主", "管理员", "群管理员", "新人", "活跃", "潜水")
+
+    private class TV(val text: String, val top: Int, val kind: Int) // kind: 0 非气泡, 1 白色(对方), 2 绿色(我)
+
+    /** 取气泡背景(.9图)中心像素颜色：偏绿=我；白/灰=对方；其他=不是聊天气泡 */
+    private fun bubbleKind(v: View, row: View): Int {
+        var c: View? = v
+        while (c != null) {
+            val bg = c.background
+            if (bg != null) {
+                val cur = bg.current
+                if (cur is NinePatchDrawable || cur is BitmapDrawable) return classify(sample(bg))
+            }
+            if (c === row) break
+            c = c.parent as? View
+        }
+        return 0
+    }
+
+    private fun sample(bg: Drawable): Int? = try {
+        val dr = bg.constantState?.newDrawable()?.mutate()
+        if (dr == null) null else {
+            val bmp = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
+            dr.setBounds(0, 0, 96, 96); dr.draw(Canvas(bmp))
+            val px = bmp.getPixel(48, 48); bmp.recycle(); px
+        }
+    } catch (t: Throwable) { null }
+
+    private fun classify(px: Int?): Int {
+        if (px == null) return 0
+        val alpha = px ushr 24
+        if (alpha < 24) return 0
+        val r = (px shr 16) and 255; val g = (px shr 8) and 255; val b = px and 255
+        return when {
+            g - r > 18 && g - b > 18 -> 2
+            maxOf(r, g, b) - minOf(r, g, b) < 30 -> 1
+            else -> 0
+        }
+    }
+
+    private fun readRows(list: ViewGroup): List<Msg> {
+        val w = a.resources.displayMetrics.widthPixels
+        val out = ArrayList<Msg>()
+        for (i in 0 until list.childCount) {
+            val row = list.getChildAt(i)
+            val avatars = ArrayList<IntArray>() // [x中心, top, 尺寸]
+            val tvs = ArrayList<TV>()
+            fun walk(v: View) {
+                if (!v.isShown) return
+                if (v is ImageView) {
+                    val sz = v.width
+                    if (sz in dp(30)..dp(72) && Math.abs(v.width - v.height) < dp(4)) {
+                        val loc = IntArray(2); v.getLocationOnScreen(loc)
+                        avatars.add(intArrayOf(loc[0] + sz / 2, loc[1], sz))
+                    }
+                }
+                if (v is TextView && v !is EditText) {
+                    val t = v.text?.toString()?.trim().orEmpty()
+                    if (t.isNotEmpty()) {
+                        val loc = IntArray(2); v.getLocationOnScreen(loc)
+                        tvs.add(TV(t, loc[1], bubbleKind(v, row)))
+                    }
+                }
+                if (v is ViewGroup) for (k in 0 until v.childCount) walk(v.getChildAt(k))
+            }
+            walk(row)
+            val bubble = tvs.filter { it.kind != 0 }.maxByOrNull { it.top }
+            if (bubble == null) {
+                // 没有文字气泡：有头像的行视为图片/表情
+                val av = avatars.minByOrNull { minOf(it[0], w - it[0]) } ?: continue
+                out.add(Msg(av[0] > w / 2, "[图片/表情]"))
+                continue
+            }
+            val text = bubble.text
+            if (text.length > 300 || timeRe.matches(text) || noise.matches(text)) continue
+            val fromMe = bubble.kind == 2
+            val who = if (fromMe) "" else tvs.filter { it.kind == 0 && it.top < bubble.top && it.text !in tags }
+                .maxByOrNull { it.text.length }?.text.orEmpty()
+            out.add(Msg(fromMe, text, who))
+        }
+        return out
+    }
+}
