@@ -5,7 +5,7 @@ import dev.goutou.wingman.llm.JsonValue
 import dev.goutou.wingman.llm.arr
 import dev.goutou.wingman.llm.asArr
 import dev.goutou.wingman.llm.asBool
-import dev.goutou.wingman.llm.asInt
+import dev.goutou.wingman.llm.asDouble
 import dev.goutou.wingman.llm.asObj
 import dev.goutou.wingman.llm.asStr
 import dev.goutou.wingman.llm.bool
@@ -62,7 +62,7 @@ object Roles {
                 val mo = mi.asObj() ?: return@mapNotNull null
                 val text = mo["t"].asStr()?.trim().orEmpty()
                 if (text.isEmpty()) return@mapNotNull null
-                RoleMsg(mo["me"].asBool() ?: false, text, mo["a"].asInt()?.toLong() ?: 0L)
+                RoleMsg(mo["me"].asBool() ?: false, text, mo["a"].asDouble()?.toLong() ?: 0L)
             }
             Role(
                 name = name,
@@ -102,7 +102,7 @@ object Roles {
             val name = o["n"].asStr()?.trim().orEmpty()
             val text = o["t"].asStr()?.trim().orEmpty()
             if (name.isEmpty() || text.isEmpty()) return@mapNotNull null
-            name to RoleMsg(o["me"].asBool() ?: false, text, o["a"].asInt()?.toLong() ?: 0L)
+            name to RoleMsg(o["me"].asBool() ?: false, text, o["a"].asDouble()?.toLong() ?: 0L)
         }
     }
 
