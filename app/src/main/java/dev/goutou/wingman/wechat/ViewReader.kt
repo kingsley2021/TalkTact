@@ -49,6 +49,9 @@ internal class ViewReader(private val a: Activity) {
 
     /** 类 -> 它的 getText() 方法（null 表示这个类没有）。只查一次。 */
     private val textMethods = HashMap<Class<*>, java.lang.reflect.Method?>()
+
+    /** 类 -> 它所有「无参返回 CharSequence」的方法（暴力反射用）。 */
+    private val anyTextMethods = HashMap<Class<*>, List<java.lang.reflect.Method>>()
     private val pageBg: Int by lazy { detectPageBackground() }
 
     /** 上一次 findList 的候选情况，只用于诊断输出。 */
@@ -146,10 +149,12 @@ internal class ViewReader(private val a: Activity) {
         if (n == 0) return "0"
         val sb = StringBuilder(n.toString())
         walk(list.getChildAt(n - 1), includeInvisible = true) { v ->
-            if (v is TextView && v !is EditText) {
-                val t = v.text?.toString()?.trim().orEmpty()
-                if (t.isNotEmpty()) sb.append('|').append(t.take(48))
+            val t = if (v is TextView && v !is EditText) {
+                v.text?.toString()?.trim().orEmpty()
+            } else {
+                TextCapture.textOf(v)?.toString()?.trim().orEmpty()
             }
+            if (t.isNotEmpty()) sb.append('|').append(t.take(48))
         }
         return sb.toString()
     }
@@ -185,7 +190,7 @@ internal class ViewReader(private val a: Activity) {
 
                 v is TextView && v !is EditText -> {
                     val text = v.text?.toString()?.trim().orEmpty()
-                    if (text.isNotEmpty()) {
+                    if (text.isNotEmpty() && v.width > 0 && v.height > 0) {
                         val kind = when {
                             Chrome.isTime(text) -> Kind.TIMESTAMP
                             Chrome.isTag(text) -> Kind.TAG
@@ -199,20 +204,29 @@ internal class ViewReader(private val a: Activity) {
                 }
 
                 else -> {
+                    // 自己画字的控件（如 MMNeat7extView）：先看钩子抓到的原文
+                    val caught = TextCapture.textOf(v)?.toString()?.trim().orEmpty()
+                    if (okText(caught)) {
+                        nodes.add(TextNode(caught, topOf(v), Kind.OTHER, 0f, v.isShown) to bubbleOf(v, row))
+                        return@walk
+                    }
                     val t = fallbackText(v)
                     if (t.isNotEmpty()) {
-                        // 正文既不在 TextView 里，那就当成候选正文参与气泡判定
                         nodes.add(TextNode(t, topOf(v), Kind.OTHER, 0f, v.isShown) to bubbleOf(v, row))
+                        return@walk
                     }
+                    // 还没有文字、又有正常尺寸 —— 它很可能就是正文控件：挂上 setText 钩子，
+                    // 下次微信重新绑定这一行时就能拿到原文
+                    if (v.width >= dp(40) && v.height >= dp(18)) TextCapture.hookClass(v.javaClass)
                 }
             }
         }
 
         // 第二遍：整行一个字都没读到 —— 那就问无障碍节点（微信自绘正文时通常只在这里留文字）
-        if (nodes.isEmpty() && spoken.isEmpty()) {
+        if (nodes.none { it.first.kind == Kind.OTHER } && spoken.isEmpty()) {
             val budget = intArrayOf(6)
             walk(row, includeInvisible = true) { v ->
-                if (budget[0] > 0) {
+                if (budget[0] > 0 && v.width > 0 && v.height > 0) {
                     budget[0]--
                     val a11y = a11yText(v)
                     if (okText(a11y)) {
@@ -279,12 +293,47 @@ internal class ViewReader(private val a: Activity) {
         }
     }
 
+    /**
+     * 暴力反射：把这个类所有「无参、返回 CharSequence」的方法都调一遍，取最长的。
+     * 不知道微信把文字存在哪个字段/哪个 getter 时，这招最省事（每个类只收集一次方法列表）。
+     */
+    private fun reflectAnyText(v: View): String {
+        val cls = v.javaClass
+        val methods = if (anyTextMethods.containsKey(cls)) {
+            anyTextMethods[cls]
+        } else {
+            val found = try {
+                cls.methods.filter {
+                    it.parameterCount == 0 &&
+                        CharSequence::class.java.isAssignableFrom(it.returnType) &&
+                        it.declaringClass != View::class.java
+                }.take(30)
+            } catch (t: Throwable) {
+                emptyList()
+            }
+            anyTextMethods[cls] = found
+            found
+        } ?: return ""
+        var best = ""
+        for (m in methods) {
+            val text = try {
+                (m.invoke(v) as? CharSequence)?.toString()?.trim().orEmpty()
+            } catch (t: Throwable) {
+                ""
+            }
+            if (text.length in (best.length + 1)..400) best = text
+        }
+        return best
+    }
+
     /** 第一层兜底：无障碍描述 -> 反射 getText 之类。 */
     private fun fallbackText(v: View): String {
         val desc = v.contentDescription?.toString()?.trim().orEmpty()
         if (okText(desc)) return desc
         val reflected = reflectText(v)
         if (okText(reflected)) return reflected
+        val any = reflectAnyText(v)
+        if (okText(any)) return any
         return ""
     }
 
@@ -294,7 +343,7 @@ internal class ViewReader(private val a: Activity) {
         ""
     }
 
-    private fun okText(s: String): Boolean = s.length in 2..200 && s !in UI_WORDS
+    private fun okText(s: String): Boolean = s.length in 2..400 && s !in UI_WORDS
 
     /**
      * 认不出气泡容器时的兜底：
@@ -365,7 +414,7 @@ internal class ViewReader(private val a: Activity) {
             count++
             sb.append("  ".repeat(depth))
                 .append('#').append(count - 1).append(' ')
-                .append(v.javaClass.simpleName).append(' ')
+                .append(v.javaClass.name).append(' ')
                 .append(v.width).append('x').append(v.height)
                 .append('@').append(leftOf(v)).append(',').append(topOf(v))
                 .append(" v").append(v.visibility).append(if (v.isShown) 'S' else 's')
@@ -373,6 +422,8 @@ internal class ViewReader(private val a: Activity) {
             if (text.isNotEmpty()) sb.append(" t=\"").append(text.take(18)).append('"')
             val desc = v.contentDescription?.toString()?.trim().orEmpty()
             if (desc.isNotEmpty()) sb.append(" d=\"").append(desc.take(18)).append('"')
+            val caught = TextCapture.textOf(v)?.toString()?.trim().orEmpty()
+            if (caught.isNotEmpty()) sb.append(" c=\"").append(caught.take(18)).append('"')
             if (text.isEmpty() && desc.isEmpty() && v !is ViewGroup) {
                 val reflected = reflectText(v)
                 if (reflected.isNotEmpty()) sb.append(" r=\"").append(reflected.take(18)).append('"')

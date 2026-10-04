@@ -27,6 +27,7 @@ object Keys {
     const val TOKENS = "stat_tokens"
     const val DIAG = "diag"
     const val DIAG_AT = "diag_at"
+    const val LEARNED = "learned_classes"
 }
 
 data class ConfigData(
@@ -108,6 +109,9 @@ class ConfigStore(context: Context) {
     fun diag(): String = sp.getString(Keys.DIAG, "").orEmpty()
 
     fun diagAt(): Long = sp.getLong(Keys.DIAG_AT, 0L)
+
+    /** 已经学会「自己画字」的控件类（模块下次启动就先挂钩子）。 */
+    fun learnedClasses(): Set<String> = sp.getStringSet(Keys.LEARNED, emptySet()).orEmpty()
 
     fun scopeConfirmed(): Boolean = sp.getBoolean(Keys.SCOPE_OK, false)
 

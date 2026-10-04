@@ -11,8 +11,8 @@ android {
         applicationId = "dev.goutou.wingman"
         minSdk = 28
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.2.5"
+        versionCode = 8
+        versionName = "0.2.6"
     }
     buildTypes {
         release { isMinifyEnabled = false }

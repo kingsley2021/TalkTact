@@ -301,6 +301,15 @@ internal class Panel(private val a: Activity) {
             showCard(false)
             return
         }
+        // 刚学到新的「自己在画字」的控件类：回传 App 持久化，并强制重新绑定可见行。
+        // （setText 钩子是「看到控件才挂」的，而这批文字在挂钩之前就设好了；
+        //   重新绑定一次就能把原文喂进钩子）
+        val fresh = TextCapture.takeLearned()
+        if (fresh.isNotEmpty()) {
+            fresh.forEach { Heartbeat.send(a, 0, learned = it) }
+            nudgeRebind(list)
+        }
+
         // 安全网：一条文字都没读到，说明「读的东西」本身就不对。
         // 这时候去调模型只会浪费 token 并给出荒谬建议，所以先停下、留诊断、明确告诉用户。
         if (msgs.size >= 2 && msgs.all { it.attachment }) {
@@ -336,6 +345,17 @@ internal class Panel(private val a: Activity) {
             return
         }
         ask(cfg, msgs, fingerprint)
+    }
+
+    /** 让列表适配器重新绑定可见行（只在新学到控件类时调用一次）。 */
+    private fun nudgeRebind(list: ViewGroup) {
+        try {
+            val adapter = list.javaClass.getMethod("getAdapter").invoke(list) ?: return
+            adapter.javaClass.getMethod("notifyDataSetChanged").invoke(adapter)
+            XposedBridge.log("[Goutou] 已请求列表重新绑定（好让 setText 钩子抓到原文）")
+        } catch (t: Throwable) {
+            // 不是 RecyclerView 就算了；下次滚动/新消息时会自然重新绑定
+        }
     }
 
     private fun dumpDiagnosis(decor: View, list: ViewGroup?, input: View?, why: String, manual: Boolean = false) {
