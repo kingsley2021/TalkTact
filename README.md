@@ -1,8 +1,16 @@
-# 狗头军师 · 微信聊天副驾（LSPosed 模块）v0.2
+# TalkTact · 微信聊天副驾（LSPosed 模块）
 
-在微信聊天页顶部悬浮一张卡片：读最近几条消息 → 调 LLM → 给 3 条风格不同的候选回复 → **点一下填入输入框**（本模块不会自动发送）。
+在微信聊天页顶部悬浮一张卡片：读最近几条消息 → 调 LLM → 给 3 条风格不同的候选回复 → **点一下填入输入框**（不会自动发送）。
 
-这是对 v0.1 的重写版（原版源码以 `bundle*.txt` 形式存放，本版改成正常源码树）。改了什么、为什么改，见 **[IMPROVEMENTS.md](IMPROVEMENTS.md)**。
+当前版本 **v0.5.0**。对 v0.1 的重写说明见 [IMPROVEMENTS.md](IMPROVEMENTS.md)，历次改动见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 功能
+
+- **候选回复卡片** —— 聊天页顶部悬浮；读最近 N 条，给 3 条策略不同的候选（稳妥 / 幽默 / 推进），点一下填入输入框，长按复制。
+- **多套 skill** —— 内置「原版狗头军师」「狗头军师·满血版」「程序员搭子」；也能粘一个 GitHub 上 `SKILL.md` 的地址导入，导入时自动补 JSON 输出契约。
+- **角色档案** —— 按微信名归档平时聊到的内容（同一内容 1 小时内只留一条），给每个人写「TA 是你什么人」和「平时的关系」；生成时会连同攒下的聊天记录一起拼进提示词，直接影响输出。
+- **液态玻璃界面** —— 面板背后是真实的背景模糊（`RenderEffect`）；不透明度与模糊半径可调，可换背景图。
+- **自检与排查** —— 心跳检测（确认在微信进程里真的生效）、接口自检、敏感内容自检、界面结构诊断，以及把「最近一次调用真正发出去的那一份」回传核对。
 
 ## 环境要求
 
@@ -24,7 +32,7 @@ gradle :app:assembleDebug       # 产出 app/build/outputs/apk/debug/app-debug.a
 
 ## 安装
 
-1. 装 APK → LSPosed「模块」里启用「狗头军师」→ **作用域勾选微信** → 强杀微信重开。
+1. 装 APK → LSPosed「模块」里启用「TalkTact」→ **作用域勾选微信** → 强杀微信重开。
 2. 打开本 App：「设置」填接口地址（OpenAI 兼容，写到 `/v1`）、API Key、模型。
 3. 回首页点「接口自检」——真发一次最小请求，确认地址/Key/模型都对。
 4. 到微信里打开一个聊天，顶部会出现候选回复卡片。
@@ -37,7 +45,9 @@ gradle :app:assembleDebug       # 产出 app/build/outputs/apk/debug/app-debug.a
 ```
 app/src/main/java/dev/goutou/wingman/
 ├── MainActivity.kt / ModuleStatus.kt / HeartbeatReceiver.kt   App 入口、模块探针、心跳
-├── config/Config.kt        配置读写（App 与注入代码共用一套 key）
+├── config/
+│   ├── Config.kt           配置读写（App 与注入代码共用一套 key）
+│   └── Roles.kt            角色的归档 / 1 小时查重 / 序列化（纯函数，可单测）
 ├── llm/
 │   ├── Json.kt             手写的最小 JSON（解析 + 生成），核心逻辑因此零依赖
 │   ├── Suggestion.kt       模型输出的解析与容错
@@ -53,7 +63,7 @@ app/src/main/java/dev/goutou/wingman/
 │   └── WeChatHook.kt       Xposed 入口
 └── ui/
     ├── Ui.kt               主题 / 背景层 / 液态玻璃组件（GlassSurface 里是真实背景模糊）
-    └── Screens.kt          四个页面
+    └── Screens.kt          五个页面（运行状态 / 试一试 / 军师 / 角色 / 设置）
 app/src/test/java/…         纯逻辑层单元测试（22 个用例）
 tools/pack-bundle.py        可选：把源码树重新打包成 v0.1 那种 bundle 格式
 ```
@@ -92,5 +102,7 @@ Activity.onResume ──► Panel（每个 Activity 一个）
 - 依赖微信当前的消息列表控件类型（`AbsListView` / `RecyclerView`），改了就得跟着改。
 - API Key 明文存放在本应用私有目录（原因见「设置」页说明），别把 `cfg.xml` 到处备份。
 - 本模块只读消息、只填输入框、不自动发送；但仍属于修改微信客户端行为，有风控风险，建议先用小号。
+- 「角色」页的记录是**部分历史**：模块只在聊天页可见时读得到屏幕上的那几行，所以你不在场时发生的对话不会被记下来。
+- 角色名从聊天页顶部标题认，认不出来会整页跳过（宁可漏记也不记错人）；偶尔认错的话把那一页的「诊断」发出来即可调。
 - 玻璃面板背后的模糊是**面板级**的：每块玻璃只对「自己那一块」的背景做一次离屏模糊，代价和面板面积成正比。
   默认渐变背景没有细节可模糊，这时会自动跳过，省一次离屏渲染；配了自定义背景图才看得出效果。

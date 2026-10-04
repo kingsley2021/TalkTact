@@ -604,7 +604,7 @@ internal class Panel(private val a: Activity) {
         busy = true
         lastCallAt = System.currentTimeMillis()
         val gen = ++generation
-        showMessage("狗头军师思考中…")
+        showMessage("TalkTact 思考中…")
         Thread {
             var suggestion: Suggestion? = null
             var tokens = 0
@@ -701,7 +701,7 @@ internal class Panel(private val a: Activity) {
     }
 
     private fun showMessage(message: String, isError: Boolean = false) {
-        title.text = if (isError) "生成失败" else "狗头军师"
+        title.text = if (isError) "生成失败" else "TalkTact"
         title.setTextColor(if (isError) colorBad else colorAccent)
         bodyBox.removeAllViews()
         bodyBox.addView(label(message, 13f, if (isError) colorBad else colorMain))

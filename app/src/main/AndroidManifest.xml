@@ -12,13 +12,13 @@
     <uses-permission android:name="dev.goutou.wingman.permission.HEARTBEAT" />
 
     <application
-        android:label="狗头军师"
+        android:label="TalkTact"
         android:icon="@android:drawable/sym_def_app_icon"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:allowBackup="false">
         <meta-data android:name="xposedmodule" android:value="true" />
         <meta-data android:name="xposeddescription"
-            android:value="微信聊天副驾：读最近几条消息，给 3 条候选回复。只填入输入框，不自动发送。" />
+            android:value="TalkTact：微信聊天副驾。读聊天页最近几条消息，给 3 条策略不同的候选回复；可按联系人写关系档案影响生成。只填入输入框，不自动发送。" />
         <meta-data android:name="xposedminversion" android:value="93" />
         <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
 
