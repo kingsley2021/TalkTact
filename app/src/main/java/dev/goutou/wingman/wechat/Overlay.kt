@@ -89,6 +89,8 @@ internal class Panel(private val a: Activity) {
     private var dismissed = ""
     private var skipSensitiveFor = ""
 
+    private var lastDiagAt = 0L
+    private var noListTicks = 0
     private var config: ConfigData? = null
     private var prefsStamp = -1L
     private var inputRef: EditText? = null
@@ -148,7 +150,7 @@ internal class Panel(private val a: Activity) {
         title.setTextColor(colorAccent)
         // 长按标题：把当前 View 树结构写成诊断（App 首页可复制，日志里也有一份）
         title.setOnLongClickListener {
-            a.window?.decorView?.let { decor -> dumpDiagnosis(decor, listRef, inputRef, "手动诊断") }
+            a.window?.decorView?.let { decor -> dumpDiagnosis(decor, listRef, inputRef, "手动诊断", manual = true) }
             toast("诊断已写入：App 首页「诊断」卡片可复制，或看 LSPosed 日志 [Goutou]")
             true
         }
@@ -268,12 +270,22 @@ internal class Panel(private val a: Activity) {
         }
         place(list)
         if (list == null) {
-            if (force) {
-                force = false
-                showMessage("没找到消息列表（微信版本可能改了控件类型）")
+            // 布局刚切换时会短暂读不到，连续两次才算真的找不到
+            noListTicks++
+            if (noListTicks >= 2) {
+                dumpDiagnosis(decor, null, input, "找到了输入框，但没找到消息列表")
+                if (force || noListTicks == 2) {
+                    force = false
+                    showMessage(
+                        "没找到消息列表（微信版本可能改了控件类型）。\n" +
+                            "诊断已保存到 App 首页，长按标题可再次生成。",
+                        isError = true,
+                    )
+                }
             }
             return
         }
+        noListTicks = 0
 
         val fingerprint = reader.fingerprint(list)
         if (!force && fingerprint == lastFingerprint) return
@@ -326,7 +338,10 @@ internal class Panel(private val a: Activity) {
         ask(cfg, msgs, fingerprint)
     }
 
-    private fun dumpDiagnosis(decor: View, list: ViewGroup?, input: View?, why: String) {
+    private fun dumpDiagnosis(decor: View, list: ViewGroup?, input: View?, why: String, manual: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!manual && now - lastDiagAt < 30_000L) return
+        lastDiagAt = now
         try {
             val diag = "$why\n" + reader.diagnose(decor, list, input)
             XposedBridge.log("[Goutou] $diag")
@@ -469,6 +484,7 @@ internal class Panel(private val a: Activity) {
 
     private fun hideAll() {
         onChat = false
+        noListTicks = 0
         card.visibility = View.GONE
         chip.visibility = View.GONE
     }
