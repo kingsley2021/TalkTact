@@ -1,0 +1,117 @@
+package dev.goutou.wingman
+
+import dev.goutou.wingman.wechat.ATTACHMENT_TEXT
+import dev.goutou.wingman.wechat.AvatarNode
+import dev.goutou.wingman.wechat.Bubble
+import dev.goutou.wingman.wechat.ChatParser
+import dev.goutou.wingman.wechat.Kind
+import dev.goutou.wingman.wechat.RowSnapshot
+import dev.goutou.wingman.wechat.Side
+import dev.goutou.wingman.wechat.TextNode
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ChatParserTest {
+    private val w = 1080
+    private val parser = ChatParser(w)
+
+    private fun row(
+        text: String?,
+        top: Int,
+        color: Side = Side.UNKNOWN,
+        center: Double? = null,
+        avatarOnRight: Boolean? = null,
+        nickname: String? = null,
+    ): RowSnapshot {
+        val avatars = when (avatarOnRight) {
+            null -> emptyList()
+            true -> listOf(AvatarNode(w - 60, top, 96))
+            false -> listOf(AvatarNode(60, top, 96))
+        }
+        val texts = ArrayList<TextNode>()
+        nickname?.let { texts.add(TextNode(it, top - 40, Kind.NICKNAME, 28f)) }
+        text?.let { texts.add(TextNode(it, top, Kind.BUBBLE, 36f)) }
+        return RowSnapshot(Bubble(text, color, center, top), texts, avatars)
+    }
+
+    @Test
+    fun `单聊方向正确`() {
+        val msgs = parser.parse(
+            listOf(
+                row("在吗", 300, Side.OTHER, 0.35, false),
+                row("在", 400, Side.ME, 0.65, true),
+                row("周末有空吗", 500, Side.OTHER, 0.35, false),
+            ),
+        )
+        assertEquals(3, msgs.size)
+        assertFalse(msgs[0].fromMe)
+        assertTrue(msgs[1].fromMe)
+        assertFalse(msgs[2].fromMe)
+        assertEquals("周末有空吗", msgs[2].text)
+    }
+
+    @Test
+    fun `深色模式把气泡判成对方时靠头像和左右纠正回来`() {
+        // 深色气泡底色接近页面底色 -> colorSide 只能是 OTHER；但头像在右、气泡靠右
+        val msgs = parser.parse(listOf(row("我发的", 300, Side.OTHER, 0.7, true)))
+        assertEquals(1, msgs.size)
+        assertTrue(msgs[0].fromMe)
+    }
+
+    @Test
+    fun `颜色和头像冲突时以头像为准`() {
+        val msgs = parser.parse(listOf(row("hi", 300, Side.ME, 0.35, false)))
+        assertEquals(1, msgs.size)
+        assertFalse(msgs[0].fromMe)
+    }
+
+    @Test
+    fun `群聊带出昵称`() {
+        val msgs = parser.parse(listOf(row("周六谁去", 300, Side.OTHER, 0.35, false, nickname = "张三")))
+        assertEquals("张三", msgs[0].who)
+    }
+
+    @Test
+    fun `时间戳 未读数 服务提示 超长文本都被过滤`() {
+        val msgs = parser.parse(
+            listOf(
+                row("19:03", 100, Side.UNKNOWN, 0.5),
+                row("星期三 19:03", 150, Side.UNKNOWN, 0.5),
+                row("3", 200, Side.UNKNOWN, 0.5),
+                row("群主", 250, Side.UNKNOWN, 0.5),
+                row("啊".repeat(500), 300, Side.OTHER, 0.35, false),
+                row("真的在吗", 400, Side.OTHER, 0.35, false),
+            ),
+        )
+        assertEquals(1, msgs.size)
+        assertEquals("真的在吗", msgs[0].text)
+    }
+
+    @Test
+    fun `没有文字但有头像的行算图片`() {
+        val msgs = parser.parse(listOf(row(null, 300, Side.UNKNOWN, null, false)))
+        assertEquals(1, msgs.size)
+        assertEquals(ATTACHMENT_TEXT, msgs[0].text)
+        assertTrue(msgs[0].attachment)
+        assertFalse(msgs[0].fromMe)
+    }
+
+    @Test
+    fun `三个信号全缺失时宁可不显示也不猜`() {
+        assertTrue(parser.parse(listOf(row("???", 300, Side.UNKNOWN, null, null))).isEmpty())
+    }
+
+    @Test
+    fun `相邻重复只留一条`() {
+        val rows = listOf(row("好的", 300, Side.OTHER, 0.35, false), row("好的", 320, Side.OTHER, 0.35, false))
+        assertEquals(1, parser.parse(rows).size)
+    }
+
+    @Test
+    fun `首尾空白和零宽字符被清掉`() {
+        val msgs = parser.parse(listOf(row("  你好\u200b  ", 300, Side.OTHER, 0.35, false)))
+        assertEquals("你好", msgs[0].text)
+    }
+}

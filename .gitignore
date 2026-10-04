@@ -1,0 +1,10 @@
+# 别把构建产物和本地配置提交上来
+.gradle/
+build/
+app/build/
+local.properties
+*.apk
+*.keystore
+.idea/
+captures/
+.cxx/

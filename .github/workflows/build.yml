@@ -9,26 +9,12 @@ jobs:
         with: { distribution: temurin, java-version: 17 }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: 8.7 }
-      - name: unpack
-        run: |
-          python3 - <<'PY'
-          import re, os, glob
-          for f in sorted(glob.glob('bundle*.txt')):
-              t = open(f, encoding='utf-8', errors='ignore').read()
-              parts = re.split(r'^#### FILE: (.+)$', t, flags=re.M)
-              print(f, 'size', len(t), 'files', len(parts)//2)
-              for i in range(1, len(parts), 2):
-                  p = parts[i].strip()
-                  os.makedirs(os.path.dirname(p) or '.', exist_ok=True)
-                  open(p, 'w', encoding='utf-8').write(parts[i+1].lstrip('\n'))
-          PY
-          find . -not -path './.git/*' -type f | head -40
-      - name: build
-        run: |
-          S=$(find . -name settings.gradle.kts | head -1)
-          test -n "$S" || { echo "没有找到 settings.gradle.kts"; exit 1; }
-          cd "$(dirname "$S")" && gradle assembleDebug --no-daemon
+      # 纯逻辑层的单元测试（不依赖 Android SDK，几秒钟）
+      - name: unit test
+        run: gradle :app:testDebugUnitTest --no-daemon --stacktrace
+      - name: build apk
+        run: gradle :app:assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: "**/build/outputs/apk/debug/*.apk"
+          path: app/build/outputs/apk/debug/*.apk
