@@ -23,6 +23,16 @@ import java.util.WeakHashMap
  */
 internal object TextCapture {
 
+    /** 不是正文的 setter，见 hookClass 里的说明。 */
+    private val SKIP_SETTERS = setOf(
+        "setHint",
+        "setError",
+        "setContentDescription",
+        "setTooltipText",
+        "setTransitionName",
+        "setStateDescription",
+    )
+
     private val captured = WeakHashMap<View, CharSequence>()
     private val hookedClasses = HashSet<String>()
     private val pending = LinkedHashSet<String>()
@@ -65,6 +75,9 @@ internal object TextCapture {
         for (m in methods) {
             if (!m.name.startsWith("set") || m.parameterTypes.isEmpty()) continue
             if (!CharSequence::class.java.isAssignableFrom(m.parameterTypes[0])) continue
+            // 只认正文。setHint / setError / setContentDescription 存下来的不是聊天内容，
+            // 一旦被当成正文，就会串进候选回复里（而且它们常常在 setText 之后被调用，会覆盖掉真正文）。
+            if (m.name in SKIP_SETTERS) continue
             try {
                 XposedBridge.hookMethod(
                     m,

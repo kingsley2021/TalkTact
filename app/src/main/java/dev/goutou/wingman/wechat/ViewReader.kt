@@ -190,7 +190,7 @@ internal class ViewReader(private val a: Activity) {
 
                 v is TextView && v !is EditText -> {
                     val text = v.text?.toString()?.trim().orEmpty()
-                    if (text.isNotEmpty() && v.width > 0 && v.height > 0) {
+                    if (okText(text) && v.width > 0 && v.height > 0) {
                         val kind = when {
                             Chrome.isTime(text) -> Kind.TIMESTAMP
                             Chrome.isTag(text) -> Kind.TAG
@@ -198,8 +198,15 @@ internal class ViewReader(private val a: Activity) {
                         }
                         nodes.add(TextNode(text, topOf(v), kind, v.textSize, v.isShown) to bubbleOf(v, row))
                     } else {
-                        val t = fallbackText(v)
-                        if (t.isNotEmpty()) spoken.add(TextNode(t, topOf(v), Kind.OTHER, 0f, v.isShown))
+                        // text 为空的 TextView 子类（自己画字的）在这里也要问一次钩子 ——
+                        // 之前只有「非 TextView」分支问，这类控件就一直读不到字，只能退到反射拿类名。
+                        val caught = TextCapture.textOf(v)?.toString()?.trim().orEmpty()
+                        val t = if (okText(caught)) caught else fallbackText(v)
+                        if (t.isNotEmpty()) {
+                            spoken.add(TextNode(t, topOf(v), Kind.OTHER, v.textSize, v.isShown))
+                        } else if (v.width >= dp(40) && v.height >= dp(18)) {
+                            TextCapture.hookClass(v.javaClass)
+                        }
                     }
                 }
 
@@ -306,7 +313,15 @@ internal class ViewReader(private val a: Activity) {
                 cls.methods.filter {
                     it.parameterCount == 0 &&
                         CharSequence::class.java.isAssignableFrom(it.returnType) &&
-                        it.declaringClass != View::class.java
+                        // 「别把控件自述当聊天文字」三道闸：
+                        // getAccessibilityClassName() 在 TextView 里被 override 过，declaringClass
+                        // 变成 TextView 而不是 View，光排除 View 挡不住；toString() 声明在 Object 上，
+                        // 同样挡不住 —— 它俩一个返回 "android.widget.TextView"，
+                        // 一个返回 "android.widget.LinearLayout{...}"。
+                        it.name !in BAD_TEXT_METHODS &&
+                        it.declaringClass != View::class.java &&
+                        it.declaringClass != ViewGroup::class.java &&
+                        it.declaringClass != Any::class.java
                 }.take(30)
             } catch (t: Throwable) {
                 emptyList()
@@ -321,6 +336,7 @@ internal class ViewReader(private val a: Activity) {
             } catch (t: Throwable) {
                 ""
             }
+            if (looksLikeViewDump(text)) continue
             if (text.length in (best.length + 1)..400) best = text
         }
         return best
@@ -343,7 +359,30 @@ internal class ViewReader(private val a: Activity) {
         ""
     }
 
-    private fun okText(s: String): Boolean = s.length in 2..400 && s !in UI_WORDS
+    /**
+     * 文本合法性 —— 所有「可能是聊天内容」的字符串都必须过这里。
+     *
+     * 除了长度和噪音词，还专门挡「看起来像 Java 类名 / 控件自述」的串。真实事故：
+     * `View.getAccessibilityClassName()` 返回 "android.widget.TextView"、
+     * `View.toString()` 返回 "android.widget.LinearLayout{...}"，
+     * 反射兜底把它们当成「最长的文字」选走了，于是发给模型的聊天记录变成一串类名，
+     * 模型只能顺着编 Android 梗（ConstraintLayout / RelativeLayout 就是这么来的）。
+     */
+    private fun okText(s: String): Boolean =
+        s.length in 2..400 && s !in UI_WORDS && !looksLikeViewDump(s)
+
+    /**
+     * 形如 `a.b.C` 或 `a.b.C{...}` 的串一律不是聊天内容。
+     * 要求末段首字母大写，免得误伤 `www.baidu.com` 这种正常文本。
+     */
+    private fun looksLikeViewDump(s: String): Boolean {
+        val t = s.trim()
+        if (t.isEmpty()) return false
+        if (CLASS_NAME_RE.matches(t)) return true
+        if (VIEW_DUMP_RE.containsMatchIn(t)) return true
+        val head = t.substringBefore('{').trim()
+        return head.length >= 8 && head.contains('.') && CLASS_NAME_RE.matches(head)
+    }
 
     /**
      * 认不出气泡容器时的兜底：
@@ -593,6 +632,25 @@ internal class ViewReader(private val a: Activity) {
 
         /** 反射取正文时依次尝试的方法名。 */
         val TEXT_METHODS = listOf("getText", "getTextContent", "getTextString", "getMessage")
+
+        /** 这些方法返回的 CharSequence 一定不是聊天内容（控件自述 / 状态描述）。 */
+        val BAD_TEXT_METHODS = setOf(
+            "toString",
+            "getAccessibilityClassName",
+            "getClass",
+            "getTransitionName",
+            "getStateDescription",
+            "getContentDescription",
+            "getTooltipText",
+            "getError",
+            "getHint",
+        )
+
+        /** `android.widget.TextView` 这种：每段都是合法标识符、末段首字母大写。 */
+        val CLASS_NAME_RE = Regex("^([a-zA-Z_$][a-zA-Z0-9_$]*\\.)+[A-Z][a-zA-Z0-9_$]*$")
+
+        /** `android.widget.LinearLayout{...}` 这种。 */
+        val VIEW_DUMP_RE = Regex("^([a-zA-Z_$][a-zA-Z0-9_$]*\\.)+[A-Za-z0-9_$]*\\{")
 
         /** 纯 UI 文案的无障碍描述，不当消息正文。 */
         val UI_WORDS = setOf(

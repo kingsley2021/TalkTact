@@ -1,5 +1,41 @@
 # 变更记录
 
+## v0.4.0
+
+**修：把控件类名当成聊天内容发给模型（回复里蹦出 ConstraintLayout / RelativeLayout 的真凶）**
+
+现象：用满血版时回复变成 Android 梗，例如「下回加个 ConstraintLayout，看谁还能接上」。看上去像模型在炫技。
+
+真凶在读取层 —— v0.3.2 回传的「最近一次调用」直接看出来了，发给模型的 user 消息长这样：
+
+```
+对方(android.widget.LinearLay): android.widget.TextView
+对方(android.widget.RelativeL): android.widget.TextView
+我: android.widget.TextView
+```
+
+模型收到的「对方说的话」就是两个类名，它只能顺着编梗。
+
+来源（两个都是 `reflectAnyText` 的过滤条件漏的）：
+
+- 正文 `android.widget.TextView` ← `View.getAccessibilityClassName()`。TextView 里 override 过它，
+  `declaringClass` 变成 `TextView` 而不是 `View`，所以 `declaringClass != View` 挡不住，返回的正好是类名。
+- 昵称 `android.widget.LinearLay` ← `View.toString()` → `android.widget.LinearLayout{...}`，
+  再被 `ChatParser` 的 `.take(24)` 截断（截断位置和现象完全吻合）。`toString()` 声明在 `Object` 上，同样挡不住。
+
+改法：
+
+- `reflectAnyText` 的过滤加三道闸：方法名黑名单（`toString` / `getAccessibilityClassName` / …）、
+  排除 `ViewGroup`、排除 `Object`；候选结果再过一遍形状检查。
+- `okText()` 这个统一收口加 `looksLikeViewDump()`：形如 `a.b.C` 或 `a.b.C{...}` 的串一律不算聊天内容。
+  末段要求首字母大写，免得误伤 `www.baidu.com` 这类正常文本。
+- 主路径里 `v.text` 非空判断改成走 `okText()`。
+- 空 text 的 TextView 子类也会先问一次 `TextCapture` 钩子（之前只有非 TextView 分支问），
+  读不到就顺手把钩子挂上，下次重绑就能拿到正文。
+- `TextCapture` 不再收录 `setHint` / `setError` / `setContentDescription` 等非正文 setter，
+  免得它们覆盖掉真正文。
+
+
 ## v0.3.2
 
 **新增：「最近一次调用」存档（排查 skill 到底生效没有）**
