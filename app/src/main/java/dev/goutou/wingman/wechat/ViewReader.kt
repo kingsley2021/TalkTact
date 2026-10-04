@@ -123,19 +123,14 @@ internal class ViewReader(private val a: Activity) {
     fun diagnose(root: View, list: ViewGroup?, input: View?, rowCount: Int = 3): String {
         val sb = StringBuilder()
         sb.append("DIAG 屏=").append(width).append('x').append(height)
-            .append(" dp=").append(density).append(" 夜间=").append(night).append('
-')
-        sb.append("输入框: ").append(input?.let { describe(it) } ?: "未找到").append('
-')
-        sb.append("消息列表: ").append(list?.let { describe(it) } ?: "未找到").append('
-')
-        sb.append("候选列表: ").append(lastCandidates).append('
-')
+            .append(" dp=").append(density).append(" 夜间=").append(night).append(NL)
+        sb.append("输入框: ").append(input?.let { describe(it) } ?: "未找到").append(NL)
+        sb.append("消息列表: ").append(list?.let { describe(it) } ?: "未找到").append(NL)
+        sb.append("候选列表: ").append(lastCandidates).append(NL)
         if (list != null) {
             for (i in 0 until minOf(rowCount, list.childCount)) {
                 val row = list.getChildAt(i)
-                sb.append("  行").append(i).append(' ').append(describe(row)).append('
-')
+                sb.append("  行").append(i).append(' ').append(describe(row)).append(NL)
                 val parts = ArrayList<String>(6)
                 walk(row) { v ->
                     when {
@@ -145,13 +140,13 @@ internal class ViewReader(private val a: Activity) {
                             val t = v.text?.toString()?.trim().orEmpty()
                             if (t.isNotEmpty()) {
                                 val hit = bubbleOf(v, row)
-                                parts.add("TXT\"${t.take(16)}\" ${v.width}x${v.height}@x${leftOf(v)} 气泡=${hit?.side ?: "无"}")
+                                val side = hit?.side?.name ?: "无"
+                                parts.add("TXT「${t.take(16)}」 ${v.width}x${v.height}@x${leftOf(v)} 气泡=$side")
                             }
                         }
                     }
                 }
-                if (parts.isNotEmpty()) sb.append("      ").append(parts.take(6).joinToString(" | ")).append('
-')
+                if (parts.isNotEmpty()) sb.append("      ").append(parts.take(6).joinToString(" | ")).append(NL)
             }
         }
         return sb.toString().take(1800)
@@ -167,6 +162,11 @@ internal class ViewReader(private val a: Activity) {
         val loc = IntArray(2)
         v.getLocationOnScreen(loc)
         return loc[0]
+    }
+
+    private companion object {
+        /** 避免在源码里写转义序列。 */
+        val NL: String = System.lineSeparator()
     }
 
     /**
