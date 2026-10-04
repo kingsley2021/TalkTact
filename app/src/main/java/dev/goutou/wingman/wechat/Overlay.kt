@@ -22,6 +22,8 @@ import dev.goutou.wingman.Heartbeat
 import dev.goutou.wingman.config.ConfigData
 import dev.goutou.wingman.config.Keys
 import dev.goutou.wingman.config.MODULE_PKG
+import dev.goutou.wingman.config.Roles
+import dev.goutou.wingman.config.RoleMsg
 import dev.goutou.wingman.config.PREF_NAME
 import dev.goutou.wingman.llm.LlmClient
 import dev.goutou.wingman.llm.LlmException
@@ -93,6 +95,9 @@ internal class Panel(private val a: Activity) {
     private var lastDiagAt = 0L
     private var lastDiagReq = 0L
     private var emptyNotified = false
+    private var chatName = ""
+    private var chatNameFor = ""
+    private val sentMsgs = HashSet<String>()
     private var lastAttachTry = 0L
     private var noListTicks = 0
     private var config: ConfigData? = null
@@ -363,6 +368,9 @@ internal class Panel(private val a: Activity) {
         }
         emptyNotified = false
 
+        // 记进「角色」页（认不出会话名就整页跳过，宁可漏记也不记错人）
+        recordToRoles(decor, msgs, fingerprint)
+
         // 安全网：一条文字都没读到，说明「读的东西」本身就不对。
         // 这时候去调模型只会浪费 token 并给出荒谬建议，所以先停下、留诊断、明确告诉用户。
         if (msgs.size >= 2 && msgs.all { it.attachment }) {
@@ -397,7 +405,72 @@ internal class Panel(private val a: Activity) {
             showMessage("刚分析过，${cfg.minIntervalSec}s 内不重复调用（可到「设置」调小）")
             return
         }
-        ask(cfg, msgs, fingerprint)
+        ask(cfg, msgs, fingerprint, roleContextFor(chatName, msgs))
+    }
+
+    /**
+     * 把这一轮读到的消息记进「角色」页。
+     *
+     * 会话名（= 角色名）从聊天页顶部标题认，认不出来就整页跳过 —— 宁可不记，也不能记到别人头上。
+     * 本页内先用「方向+文本」去一次重（模块 900ms 就会重读同一屏），App 侧还有
+     * 「1 小时内重复只留一条」的兜底。
+     */
+    private fun recordToRoles(decor: View, msgs: List<ChatMsg>, fingerprint: String) {
+        try {
+            if (chatNameFor != fingerprint) {
+                chatName = reader.findChatTitle(decor).orEmpty()
+                chatNameFor = fingerprint
+            }
+            if (chatName.isBlank()) return
+            val now = System.currentTimeMillis()
+            if (sentMsgs.size > 400) sentMsgs.clear()
+            val fresh = ArrayList<Pair<String, RoleMsg>>()
+            for (m in msgs) {
+                if (m.attachment || m.text.isBlank()) continue
+                val key = (if (m.fromMe) "1" else "0") + "|" + m.text
+                if (!sentMsgs.add(key)) continue
+                fresh.add(chatName to RoleMsg(m.fromMe, m.text, now))
+            }
+            if (fresh.isEmpty()) return
+            // 分批，别把广播的 extras 撑爆
+            fresh.chunked(20).forEach { Heartbeat.send(a, 0, roles = Roles.encodeIncoming(it)) }
+        } catch (t: Throwable) {
+            XposedBridge.log("[Goutou] record: $t")
+        }
+    }
+
+    /**
+     * 拼「这次要带给模型的角色背景」：TA 是你什么人 + 平时的关系 + 之前攒下的聊天记录。
+     *
+     * 当前屏幕上已经有的那几行不再重复带（否则同一句话会出现两遍，模型容易当成说了两次）。
+     */
+    private fun roleContextFor(name: String, current: List<ChatMsg>): String? {
+        if (name.isBlank()) return null
+        val raw = try {
+            prefs.getString(Keys.ROLES, "")
+        } catch (t: Throwable) {
+            null
+        }
+        if (raw.isNullOrBlank()) return null
+        val role = Roles.decode(raw).firstOrNull { it.name == name } ?: return null
+        if (role.relation.isBlank() && role.note.isBlank() && role.msgs.isEmpty()) return null
+
+        val seen = current.map { (if (it.fromMe) "1" else "0") + "|" + it.text }.toHashSet()
+        val older = role.msgs
+            .filter { (if (it.fromMe) "1" else "0") + "|" + it.text !in seen }
+            .takeLast(20)
+
+        return buildString {
+            append("【对方档案】微信名「").append(role.name).append('」')
+            if (role.relation.isNotBlank()) append("｜TA 是用户的：").append(role.relation)
+            append('\n')
+            if (role.note.isNotBlank()) append("【平时的关系】").append(role.note).append('\n')
+            if (older.isNotEmpty()) {
+                append("【更早的聊天记录（按时间顺序，本模块平时记录的）】\n")
+                older.forEach { append(if (it.fromMe) "我: " else "对方: ").append(it.text.take(60)).append('\n') }
+            }
+            append("回复要符合以上关系；不确定的地方不要脑补。")
+        }
     }
 
     /** 让列表适配器重新绑定可见行（只在新学到控件类时调用一次）。 */
@@ -527,7 +600,7 @@ internal class Panel(private val a: Activity) {
         }
     }
 
-    private fun ask(cfg: ConfigData, msgs: List<ChatMsg>, fingerprint: String) {
+    private fun ask(cfg: ConfigData, msgs: List<ChatMsg>, fingerprint: String, roleContext: String?) {
         busy = true
         lastCallAt = System.currentTimeMillis()
         val gen = ++generation
@@ -538,7 +611,7 @@ internal class Panel(private val a: Activity) {
             var error: Throwable? = null
             var trace = ""
             try {
-                val result = LlmClient(cfg, onTrace = { trace = it }).analyze(msgs)
+                val result = LlmClient(cfg, onTrace = { trace = it }).analyze(msgs, roleContext)
                 suggestion = result.suggestion
                 tokens = result.totalTokens
             } catch (t: Throwable) {

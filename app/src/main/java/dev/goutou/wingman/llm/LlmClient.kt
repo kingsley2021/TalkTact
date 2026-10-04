@@ -22,15 +22,23 @@ class LlmClient(
     private val onTrace: ((String) -> Unit)? = null,
 ) {
 
-    fun analyze(msgs: List<ChatMsg>): LlmResult {
+    /**
+     * @param roleContext 「角色」页攒下来的背景（TA 是你什么人 / 平时的关系 / 更早的聊天记录）。
+     *   刻意拼进 user 消息而不是 system：skill 提示词要保持原样（App 里显示的字长、
+     *   「最近一次调用」里核对的那份都是它），角色背景属于「这一次的素材」。
+     */
+    fun analyze(msgs: List<ChatMsg>, roleContext: String? = null): LlmResult {
         if (cfg.apiKey.isBlank()) throw LlmException("还没填 API Key", "到「设置」里填地址和 Key")
         if (msgs.isEmpty()) throw LlmException("没读到聊天内容", null)
 
         val start = System.currentTimeMillis()
         // 先落成两个局部变量：trace 要能原样看到「发出去的是什么」，不能只看 cfg
         val systemText = cfg.prompt
-        val userText = "聊天记录（时间顺序，最后一条是对方刚发的）：\n${msgs.asTranscript()}\n\n" +
-            "只输出系统要求的那个 JSON 对象，不要任何解释文字。"
+        val userText = buildString {
+            append("聊天记录（时间顺序，最后一条是对方刚发的）：\n").append(msgs.asTranscript())
+            if (!roleContext.isNullOrBlank()) append("\n\n").append(roleContext)
+            append("\n\n只输出系统要求的那个 JSON 对象，不要任何解释文字。")
+        }
         val fields = LinkedHashMap<String, JsonValue>()
         fields["model"] = str(cfg.model)
         fields["temperature"] = num(cfg.temperature)

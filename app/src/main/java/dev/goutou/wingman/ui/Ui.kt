@@ -32,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
@@ -459,6 +460,8 @@ fun formatTime(ts: Long): String =
 @Composable
 fun App(store: ConfigStore) {
     var tab by remember { mutableIntStateOf(0) }
+    // 「角色」的二级页（打开了某个人）也放在这一层：切走 tab 再回来时能回到原位
+    var roleOpen by remember { mutableStateOf<String?>(null) }
     // 只关心「影响外观」的那几个字段：玻璃透明度/模糊、背景
     var ui by remember { mutableStateOf(store.load()) }
     val health = healthOf(store)
@@ -503,6 +506,7 @@ fun App(store: ConfigStore) {
                         0 -> StatusScreen(store) { tab = 1 }
                         1 -> TrialScreen(store, ui.glassAlpha)
                         2 -> MentorScreen(store, ui.glassAlpha) { ui = store.load() }
+                        3 -> RolesScreen(store, ui.glassAlpha, roleOpen) { roleOpen = it }
                         else -> SettingsScreen(
                             store = store,
                             ui = ui,
@@ -516,7 +520,10 @@ fun App(store: ConfigStore) {
                     health = health,
                     glassAlpha = ui.glassAlpha,
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(14.dp),
-                ) { tab = it }
+                ) { next ->
+                    if (next != 3) roleOpen = null
+                    tab = next
+                }
             }
         }
     }
@@ -535,6 +542,7 @@ private fun NavBar(
         "运行状态" to Icons.Filled.Pets,
         "试一试" to Icons.Filled.PlayArrow,
         "军师" to Icons.Filled.Edit,
+        "角色" to Icons.Filled.Person,
         "设置" to Icons.Filled.Settings,
     )
     GlassSurface(

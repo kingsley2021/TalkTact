@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import dev.goutou.wingman.ModuleStatus
 import dev.goutou.wingman.config.ConfigData
 import dev.goutou.wingman.config.ConfigStore
+import dev.goutou.wingman.config.Role
 import dev.goutou.wingman.llm.BUILT_IN_SKILLS
 import dev.goutou.wingman.llm.LlmClient
 import dev.goutou.wingman.llm.RemoteSkill
@@ -819,5 +820,204 @@ fun SettingsScreen(
                 color = palette.sub,
             )
         }
+    }
+}
+
+// ================= 角色 =================
+
+/** 「TA 是你什么人」的备选。用户也可以直接把自定义的写进「平时的关系」里。 */
+private val RELATIONS = listOf("家人", "恋人", "暧昧", "朋友", "同学", "同事", "上级", "客户", "其他")
+
+/**
+ * 角色页。
+ *
+ * 列表里每个人 = 一个微信会话名。数据全自动来：模块在你打开某个聊天页时，把它读到的消息
+ * 按会话名归档回来（1 小时内重复只留一条）。点进某人可以写「TA 是你什么人」和「平时的关系」，
+ * 这两样 + 之前攒下的聊天记录会一起拼进提示词，直接影响当前 skill 生成出来的回复。
+ */
+@Composable
+fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (String?) -> Unit) {
+    val palette = LocalPalette.current
+    var tick by remember { mutableStateOf(0) }
+    val roles = remember(tick) { store.roles() }
+    val current = open?.let { name -> roles.firstOrNull { it.name == name } }
+
+    if (open != null && current != null) {
+        RoleDetail(store, current, glassAlpha) {
+            onOpen(null)
+            tick++
+        }
+        return
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
+        ScreenHeader("角色", "每个人一份档案，直接影响生成") {
+            TextButton(onClick = {
+                tick++
+                diagAskedMarker()
+            }) { Text("刷新") }
+        }
+
+        GlassCard(glassAlpha) {
+            Text("这是干什么的", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text(
+                "模块会在你打开某个聊天页时，把读到的消息按联系人归档到这里（1 小时内重复的内容只留一条）。\n" +
+                    "点进某个人，写上「TA 是你什么人」和「平时的关系」—— 这些会连同之前攒下的聊天记录一起，\n" +
+                    "拼进提示词，直接影响「军师」生成出来的回复。",
+                fontSize = 12.sp,
+                color = palette.sub,
+            )
+        }
+
+        if (roles.isEmpty()) {
+            GlassCard(glassAlpha) {
+                Text("还没有记录", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text(
+                    "去微信里打开几个聊天页，每个停两三秒，再回来点「刷新」。\n" +
+                        "（只在聊天页可见时读得到，所以记录是「你在场时看到的那几条」慢慢攒起来的。）",
+                    fontSize = 12.sp,
+                    color = palette.sub,
+                )
+            }
+        }
+
+        roles.forEach { role ->
+            GlassCard(glassAlpha, border = palette.primary.copy(alpha = if (role.relation.isBlank()) 0.15f else 0.5f)) {
+                Column(Modifier.fillMaxWidth().clickable { onOpen(role.name) }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(role.name, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = palette.text, modifier = Modifier.weight(1f))
+                        Text("${role.msgs.size} 条", fontSize = 12.sp, color = palette.sub)
+                    }
+                    Text(
+                        if (role.relation.isBlank()) "还没写 TA 是你什么人" else "${role.relation}${if (role.note.isBlank()) "" else " · ${role.note.take(18)}"}",
+                        fontSize = 12.sp,
+                        color = if (role.relation.isBlank()) palette.warn else palette.primary,
+                    )
+                    Text(
+                        "最近一条：${if (role.lastAt > 0) formatTime(role.lastAt) else "—"}",
+                        fontSize = 11.sp,
+                        color = palette.sub,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 列表页那行小字用的，避免误加状态；留着是为了和别的页面风格一致。 */
+private fun diagAskedMarker() = Unit
+
+@Composable
+private fun RoleDetail(store: ConfigStore, role: Role, glassAlpha: Float, onBack: () -> Unit) {
+    val palette = LocalPalette.current
+    var relation by remember(role.name) { mutableStateOf(role.relation) }
+    var note by remember(role.name) { mutableStateOf(role.note) }
+    var saved by remember(role.name) { mutableStateOf(false) }
+    var confirm by remember { mutableStateOf<String?>(null) }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
+        ScreenHeader(role.name, "档案 · ${role.msgs.size} 条记录") {
+            TextButton(onClick = onBack) { Text("返回") }
+        }
+
+        GlassCard(glassAlpha) {
+            Text("TA 是你什么人", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            RELATIONS.chunked(4).forEach { row ->
+                Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    row.forEach { r ->
+                        GlassPill(r, relation == r, Modifier.weight(1f)) {
+                            relation = if (relation == r) "" else r
+                            saved = false
+                        }
+                    }
+                    repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = note,
+                onValueChange = { note = it; saved = false },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
+                label = { Text("平时的关系（越具体越有用）") },
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "例：同一个组的后端，说话直接，最近在催我 review；上次帮他带过饭。",
+                fontSize = 11.sp,
+                color = palette.sub,
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = {
+                    store.setRoleProfile(role.name, relation, note)
+                    saved = true
+                },
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+            ) { Text(if (saved) "已保存" else "保存") }
+        }
+
+        GlassCard(glassAlpha) {
+            Text("记下来的聊天（${role.msgs.size} 条）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text(
+                "时间是我「看到」它的时间，不是微信里那条消息的真实时间 —— 微信不给这条信息，" +
+                    "而模块只在聊天页可见时读得到。生成回复时会带上最近 20 条（屏幕上已有的不再重复）。",
+                fontSize = 11.sp,
+                color = palette.sub,
+            )
+            Spacer(Modifier.height(6.dp))
+            if (role.msgs.isEmpty()) {
+                Text("（还没有）", fontSize = 12.sp, color = palette.sub)
+            } else {
+                var lastShown = 0L
+                role.msgs.takeLast(60).forEach { m ->
+                    if (m.at - lastShown > 10 * 60_000L) {
+                        lastShown = m.at
+                        Text(formatTime(m.at), fontSize = 10.sp, color = palette.sub, modifier = Modifier.padding(top = 6.dp))
+                    }
+                    Text(
+                        "${if (m.fromMe) "我" else "对方"}：${m.text}",
+                        fontSize = 13.sp,
+                        color = if (m.fromMe) palette.sub else palette.text,
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(
+                    onClick = { confirm = "clear" },
+                    enabled = role.msgs.isNotEmpty(),
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text("清空记录") }
+                OutlinedButton(
+                    onClick = { confirm = "remove" },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text("删除角色") }
+            }
+        }
+    }
+
+    confirm?.let { what ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text(if (what == "clear") "清空聊天记录？" else "删除这个角色？") },
+            text = {
+                Text(
+                    if (what == "clear") "只清掉记录，「TA 是你什么人 / 平时的关系」会保留。"
+                    else "档案和记录一起删掉，无法恢复。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (what == "clear") store.clearRoleMsgs(role.name) else store.removeRole(role.name)
+                    confirm = null
+                    onBack()
+                }) { Text("确定") }
+            },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("取消") } },
+        )
     }
 }

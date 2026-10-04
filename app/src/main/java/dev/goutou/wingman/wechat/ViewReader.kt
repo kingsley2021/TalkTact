@@ -77,6 +77,37 @@ internal class ViewReader(private val a: Activity) {
         return best
     }
 
+    /**
+     * 聊天页顶部那个标题 —— 也就是这个会话的名字，「角色」功能就拿它当 key。
+     *
+     * 微信没给我们正经接口，只能从界面里找：屏幕最上方、水平居中、有点宽度、不是按钮文案的 TextView。
+     * 找不到就返回 null，调用方会整页跳过 —— 宁可漏记，也不能把消息记到别人头上。
+     */
+    fun findChatTitle(root: View): String? {
+        val screenW = width
+        var best: String? = null
+        var bestScore = Int.MIN_VALUE
+        walk(root) { v ->
+            if (v !is TextView || v is EditText) return@walk
+            if (!v.isShown) return@walk
+            val t = v.text?.toString()?.trim().orEmpty()
+            if (!okText(t) || t.length > 24) return@walk
+            if (v.width < dp(40) || v.height < dp(18)) return@walk
+            if (v.width > screenW * 0.8f) return@walk
+            val loc = IntArray(2)
+            v.getLocationOnScreen(loc)
+            if (loc[1] > height * 0.14f) return@walk      // 只在顶部那一带找
+            // 越靠近屏幕中线越像标题；同样居中时取更宽的
+            val off = abs((loc[0] + v.width / 2f) - screenW / 2f) / screenW.toFloat()
+            val score = ((1f - off) * 1000).toInt() + v.width / 10
+            if (score > bestScore) {
+                bestScore = score
+                best = t
+            }
+        }
+        return best
+    }
+
     fun findChatInput(root: View): EditText? {
         var best: EditText? = null
         walk(root) { v ->

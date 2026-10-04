@@ -31,6 +31,8 @@ object Keys {
     const val LAST_CALL_AT = "last_call_at"
     /** App 里点「抓当前微信界面」时写一个时间戳，注入侧看到比上次新就去 dump 当前界面 */
     const val DIAG_REQ = "diag_req"
+    /** 「角色」页：每个微信联系人的档案 + 平时记下来的聊天记录（JSON） */
+    const val ROLES = "roles"
     const val LEARNED = "learned_classes"
     const val GLASS = "glass_alpha"
     const val GLASS_BLUR = "glass_blur"
@@ -170,6 +172,35 @@ class ConfigStore(context: Context) {
      * 没有卡片就没有入口，永远拿不到那几个页面的证据。所以改成由 App 主动发起。
      * 只动这一个 key，不走 save()，免得把别的字段一起写回去。
      */
+    // ---------------- 角色 ----------------
+
+    fun roles(): List<Role> = Roles.decode(sp.getString(Keys.ROLES, "").orEmpty())
+
+    fun saveRoles(roles: List<Role>) {
+        sp.edit().putString(Keys.ROLES, Roles.encode(roles)).apply()
+    }
+
+    /** 注入侧回传的一批新消息，合并进对应角色（1 小时内重复只留一条）。 */
+    fun mergeRoles(incomingJson: String) {
+        val incoming = Roles.decodeIncoming(incomingJson)
+        if (incoming.isEmpty()) return
+        saveRoles(Roles.merge(roles(), incoming))
+    }
+
+    /** 写「TA 是你什么人 / 平时的关系」。 */
+    fun setRoleProfile(name: String, relation: String, note: String) {
+        saveRoles(Roles.setProfile(roles(), name, relation, note))
+    }
+
+    fun removeRole(name: String) {
+        saveRoles(roles().filterNot { it.name == name })
+    }
+
+    /** 只清聊天记录，保留档案。 */
+    fun clearRoleMsgs(name: String) {
+        saveRoles(roles().map { if (it.name == name) it.copy(msgs = emptyList()) else it })
+    }
+
     fun requestDiag(): Long {
         val now = System.currentTimeMillis()
         sp.edit().putLong(Keys.DIAG_REQ, now).apply()

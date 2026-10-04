@@ -28,12 +28,14 @@ object Heartbeat {
         diag: String? = null,
         learned: String? = null,
         call: String? = null,
+        roles: String? = null,
     ) {
         try {
             val intent = Intent(ACTION).setPackage(MODULE_PKG).putExtra("tokens", tokens)
             if (diag != null) intent.putExtra("diag", diag)
             if (learned != null) intent.putExtra("learned", learned)
             if (call != null) intent.putExtra("call", call)
+            if (roles != null) intent.putExtra("roles", roles)
             context.sendBroadcast(intent, PERMISSION)
         } catch (t: Throwable) {
             // 广播失败不影响主流程
@@ -62,6 +64,18 @@ class HeartbeatReceiver : BroadcastReceiver() {
         intent.getStringExtra("call")?.let {
             editor.putString(Keys.LAST_CALL, it)
             editor.putLong(Keys.LAST_CALL_AT, System.currentTimeMillis())
+        }
+        // 「角色」的聊天记录：注入侧每轮把新读到的消息回传，这里按 1 小时窗口查重后合并
+        intent.getStringExtra("roles")?.let { payload ->
+            val sp2 = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            val incoming = dev.goutou.wingman.config.Roles.decodeIncoming(payload)
+            if (incoming.isNotEmpty()) {
+                val merged = dev.goutou.wingman.config.Roles.merge(
+                    dev.goutou.wingman.config.Roles.decode(sp2.getString(Keys.ROLES, "").orEmpty()),
+                    incoming,
+                )
+                sp2.edit().putString(Keys.ROLES, dev.goutou.wingman.config.Roles.encode(merged)).apply()
+            }
         }
         editor.apply()
     }
