@@ -115,6 +115,7 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
     var probeOk by remember { mutableStateOf(false) }
     var probing by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf(0) }
+    var diagAsked by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val glass = cfg.glassAlpha
     val active = ModuleStatus.isActive()
@@ -267,6 +268,28 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                         fontSize = 12.sp,
                         color = if (probeOk) palette.ok else palette.bad,
                     )
+                }
+            }
+        }
+        item {
+            GlassCard(glass) {
+                Text("抓取微信界面", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text(
+                    "某些聊天页连卡片都不弹时用这个：先在微信里停在那个聊天页 → 切回这里点下面的按钮 → " +
+                        "再切回微信（那个页面重新出现就会自动抓）→ 回来点「刷新」→ 复制下面的「诊断」发我。",
+                    fontSize = 12.sp,
+                    color = palette.sub,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { store.requestDiag(); diagAsked = true },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                    ) { Text("抓当前微信界面") }
+                    if (diagAsked) {
+                        Text("已排队，切回微信那一页即抓", fontSize = 12.sp, color = palette.ok)
+                    }
                 }
             }
         }

@@ -29,6 +29,8 @@ object Keys {
     const val DIAG_AT = "diag_at"
     const val LAST_CALL = "last_call"
     const val LAST_CALL_AT = "last_call_at"
+    /** App 里点「抓当前微信界面」时写一个时间戳，注入侧看到比上次新就去 dump 当前界面 */
+    const val DIAG_REQ = "diag_req"
     const val LEARNED = "learned_classes"
     const val GLASS = "glass_alpha"
     const val GLASS_BLUR = "glass_blur"
@@ -160,6 +162,19 @@ class ConfigStore(context: Context) {
     fun lastCall(): String = sp.getString(Keys.LAST_CALL, "").orEmpty()
 
     fun lastCallAt(): Long = sp.getLong(Keys.LAST_CALL_AT, 0L)
+
+    /**
+     * 请求注入侧抓一次「当前微信界面」的结构。
+     *
+     * 为什么需要它：出问题的聊天页是「连卡片都不弹」的，而诊断入口原本是长按卡片标题 ——
+     * 没有卡片就没有入口，永远拿不到那几个页面的证据。所以改成由 App 主动发起。
+     * 只动这一个 key，不走 save()，免得把别的字段一起写回去。
+     */
+    fun requestDiag(): Long {
+        val now = System.currentTimeMillis()
+        sp.edit().putLong(Keys.DIAG_REQ, now).apply()
+        return now
+    }
 
     /** 已经学会「自己画字」的控件类（模块下次启动就先挂钩子）。 */
     fun learnedClasses(): Set<String> = sp.getStringSet(Keys.LEARNED, emptySet()).orEmpty()

@@ -63,6 +63,20 @@ internal class ViewReader(private val a: Activity) {
     // ---------------- 找锚点 ----------------
 
     /** 聊天输入框：必须在屏幕偏下的位置，这样顶部的搜索框不会被当成输入框。 */
+    /**
+     * 屏幕上「像输入框」的 EditText —— 不考核尺寸和显示状态，只看它在屏幕下半部分。
+     *
+     * 专门用来解释「明明是聊天页，为什么找不到可用的输入框」：
+     * 把它的真实尺寸 / isShown 写进诊断，一眼就能看出是哪条判定卡住的。
+     */
+    fun findInputCandidate(root: View): EditText? {
+        var best: EditText? = null
+        walk(root, includeInvisible = true) { v ->
+            if (best == null && v is EditText && topOf(v) > height * 0.5) best = v
+        }
+        return best
+    }
+
     fun findChatInput(root: View): EditText? {
         var best: EditText? = null
         walk(root) { v ->

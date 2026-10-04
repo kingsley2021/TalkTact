@@ -20,6 +20,7 @@ import de.robv.android.xposed.XSharedPreferences
 import de.robv.android.xposed.XposedBridge
 import dev.goutou.wingman.Heartbeat
 import dev.goutou.wingman.config.ConfigData
+import dev.goutou.wingman.config.Keys
 import dev.goutou.wingman.config.MODULE_PKG
 import dev.goutou.wingman.config.PREF_NAME
 import dev.goutou.wingman.llm.LlmClient
@@ -90,6 +91,7 @@ internal class Panel(private val a: Activity) {
     private var skipSensitiveFor = ""
 
     private var lastDiagAt = 0L
+    private var lastDiagReq = 0L
     private var noListTicks = 0
     private var config: ConfigData? = null
     private var prefsStamp = -1L
@@ -244,6 +246,19 @@ internal class Panel(private val a: Activity) {
         val decor = a.window?.decorView ?: return
         if (!decor.hasWindowFocus()) return
 
+        // 配置文件变了就地重读。提到最前面：下面几个早退分支都依赖它，尤其是「手动抓取」。
+        refreshPrefs()
+
+        // App 里点了「抓当前微信界面」→ 把当前页面结构 dump 回去。
+        // 必须排在输入框判定**之前**：出问题的那几个聊天页正是在下面 `input == null` 处提前 return 的，
+        // 而诊断入口原本是长按卡片标题 —— 卡片都不弹，那个入口根本够不着。
+        val req = prefs.getLong(Keys.DIAG_REQ, 0L)
+        if (req > lastDiagReq) {
+            lastDiagReq = req
+            dumpDiagnosis(decor, null, reader.findChatInput(decor), "手动抓取（App 触发）", manual = true)
+            return
+        }
+
         val cachedInput = inputRef
         val input = if (cachedInput != null && cachedInput.isShown) {
             cachedInput
@@ -251,6 +266,16 @@ internal class Panel(private val a: Activity) {
             reader.findChatInput(decor)?.also { inputRef = it }
         }
         if (input == null) {
+            // 以前这里直接 hideAll() 就结束，于是「这几个聊天页为什么连卡片都不弹」永远查不出来。
+            // 现在只要屏幕上还有「像输入框」的控件，就把结构 dump 回去（30s 限流）。
+            reader.findInputCandidate(decor)?.let { cand ->
+                dumpDiagnosis(
+                    decor, null, cand,
+                    "像聊天页但找不到可用输入框：候选=${cand.javaClass.name} " +
+                        "${cand.width}x${cand.height} isShown=${cand.isShown}" +
+                        "（判定要求 宽>${dp(50)}、位于屏幕下 70%、isShown）",
+                )
+            }
             hideAll()
             return
         }
@@ -371,18 +396,31 @@ internal class Panel(private val a: Activity) {
         }
     }
 
-    private fun reloadConfig(): Boolean {
-        return try {
-            if (!prefs.file.canRead()) {
-                showMessage("读不到配置：确认模块已在 LSPosed 启用并勾选了微信，然后强杀微信重开")
-                return false
-            }
+    /**
+     * 配置文件变了就地重读 —— App 侧的任何改动（含「手动抓取」请求）都靠它生效。
+     * 只比对文件 mtime，没变就不动，所以每个 tick 调都没代价。
+     */
+    private fun refreshPrefs() {
+        try {
+            if (!prefs.file.canRead()) return
             val stamp = prefs.file.lastModified()
             if (stamp != prefsStamp) {
                 prefs.reload()
                 prefsStamp = stamp
                 config = ConfigData.from(prefs)
             }
+        } catch (t: Throwable) {
+            XposedBridge.log("[Goutou] prefs: $t")
+        }
+    }
+
+    private fun reloadConfig(): Boolean {
+        if (!prefs.file.canRead()) {
+            showMessage("读不到配置：确认模块已在 LSPosed 启用并勾选了微信，然后强杀微信重开")
+            return false
+        }
+        return try {
+            refreshPrefs()
             true
         } catch (t: Throwable) {
             XposedBridge.log("[Goutou] prefs: $t")
