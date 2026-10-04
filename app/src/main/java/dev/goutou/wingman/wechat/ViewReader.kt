@@ -155,7 +155,9 @@ internal class ViewReader(private val a: Activity) {
     private fun describe(v: View): String {
         val loc = IntArray(2)
         v.getLocationOnScreen(loc)
-        return "${v.javaClass.simpleName} ${v.width}x${v.height}@${loc[0]},${loc[1]} 子=${v.childCount}"
+        // childCount 在 ViewGroup 上，View 没有，别直接取
+        val kids = if (v is ViewGroup) v.childCount else 0
+        return "${v.javaClass.simpleName} ${v.width}x${v.height}@${loc[0]},${loc[1]} 子=$kids"
     }
 
     private fun leftOf(v: View): Int {
