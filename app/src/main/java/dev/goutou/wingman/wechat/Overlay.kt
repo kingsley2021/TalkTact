@@ -92,6 +92,8 @@ internal class Panel(private val a: Activity) {
 
     private var lastDiagAt = 0L
     private var lastDiagReq = 0L
+    private var emptyNotified = false
+    private var lastAttachTry = 0L
     private var noListTicks = 0
     private var config: ConfigData? = null
     private var prefsStamp = -1L
@@ -244,6 +246,7 @@ internal class Panel(private val a: Activity) {
 
     private fun tick() {
         val decor = a.window?.decorView ?: return
+        (decor as? ViewGroup)?.let { ensureAttached(it) }
 
         // 配置文件变了就地重读。提到最前面：下面几个早退分支都依赖它，尤其是「手动抓取」。
         refreshPrefs()
@@ -255,11 +258,13 @@ internal class Panel(private val a: Activity) {
         val req = prefs.getLong(Keys.DIAG_REQ, 0L)
         if (req > lastDiagReq) {
             lastDiagReq = req
+            val in0 = reader.findChatInput(decor)
+            val ls0 = in0?.let { reader.findList(decor, it) }
             dumpDiagnosis(
-                decor, null, reader.findChatInput(decor),
-                "手动抓取（App 触发）｜hasWindowFocus=${decor.hasWindowFocus()}｜" +
-                    "能用的输入框=${reader.findChatInput(decor)?.let { "有" } ?: "无"}",
+                decor, ls0, in0,
+                "手动抓取（App 触发）｜hasWindowFocus=${decor.hasWindowFocus()}｜输入框=${if (in0 != null) "有" else "无"}",
                 manual = true,
+                extra = stateReport(ls0),
             )
             return
         }
@@ -329,18 +334,34 @@ internal class Panel(private val a: Activity) {
         }
 
         val msgs = parser.parse(reader.snapshot(list)).takeLast(cfg.ctx)
-        if (msgs.isEmpty()) {
-            showCard(false)
-            return
-        }
-        // 刚学到新的「自己在画字」的控件类：回传 App 持久化，并强制重新绑定可见行。
-        // （setText 钩子是「看到控件才挂」的，而这批文字在挂钩之前就设好了；
-        //   重新绑定一次就能把原文喂进钩子）
+
+        // 自愈必须排在「一条都没读到」的判断**之前**。
+        // 正文控件是「看到才挂钩子」的，而文字早在挂钩之前就设好了 —— 只有让微信重绑一次，
+        // 才能把原文喂进钩子。原来这段写在下面 msgs.isEmpty() 的 return 之后，
+        // 等于最需要它的时候恰好不执行：读不到 → 立刻 return → 永远读不到。
         val fresh = TextCapture.takeLearned()
         if (fresh.isNotEmpty()) {
             fresh.forEach { Heartbeat.send(a, 0, learned = it) }
             nudgeRebind(list)
         }
+
+        if (msgs.isEmpty()) {
+            // 原来这里只有一句 showCard(false)：卡片和小气泡一起消失，用户什么都看不到、也没有提示。
+            // 现在第一次把话说清楚，并留下诊断。
+            if (!emptyNotified) {
+                emptyNotified = true
+                dumpDiagnosis(decor, list, input, "选到了消息列表，但一行文字都没解析出来（指纹=${fingerprint.take(60)}）")
+                showMessage(
+                    "这个聊天读不到文字（正文可能是自绘控件）。\n" +
+                        "已请求微信重绑一次，等一两秒看看；还不行就把 App 首页的「诊断」发我。",
+                    isError = true,
+                )
+            } else {
+                showCard(false)
+            }
+            return
+        }
+        emptyNotified = false
 
         // 安全网：一条文字都没读到，说明「读的东西」本身就不对。
         // 这时候去调模型只会浪费 token 并给出荒谬建议，所以先停下、留诊断、明确告诉用户。
@@ -390,17 +411,87 @@ internal class Panel(private val a: Activity) {
         }
     }
 
-    private fun dumpDiagnosis(decor: View, list: ViewGroup?, input: View?, why: String, manual: Boolean = false) {
+    private fun dumpDiagnosis(
+        decor: View,
+        list: ViewGroup?,
+        input: View?,
+        why: String,
+        manual: Boolean = false,
+        extra: String? = null,
+    ) {
         val now = System.currentTimeMillis()
         if (!manual && now - lastDiagAt < 30_000L) return
         lastDiagAt = now
         try {
-            val diag = "$why\n" + reader.diagnose(decor, list, input)
+            val diag = buildString {
+                append(why).append('\n')
+                if (!extra.isNullOrBlank()) append(extra).append('\n')
+                append(reader.diagnose(decor, list, input))
+            }
             XposedBridge.log("[Goutou] $diag")
             Heartbeat.send(a, 0, diag)
         } catch (t: Throwable) {
             XposedBridge.log("[Goutou] 生成诊断失败: $t")
         }
+    }
+
+    /**
+     * 面板自己的状态快照。
+     *
+     * 为什么需要：「卡片不弹」有好几个分支都能造成（一条都没解析出来 / 最后一条是我发的 /
+     * 没找到输入框 / 没找到列表 / 被关掉 / 还在最短间隔内 / 卡片挂在了旧的 decor 上），
+     * 光看 View 树区分不出来，必须把面板内部的判定变量一起报回来。
+     */
+    private fun stateReport(list: ViewGroup?): String = try {
+        val cfg = config
+        val decor = a.window?.decorView
+        val msgs = list?.let {
+            runCatching { parser.parse(reader.snapshot(it)).takeLast(cfg?.ctx ?: 8) }.getOrNull()
+        }
+        buildString {
+            append("—— 面板状态 ——\n")
+            append("running=$running attached=$attached onChat=$onChat busy=$busy force=$force\n")
+            append("card=${vis(card)} isShown=${card.isShown} 挂在当前decor=${card.parent === decor}\n")
+            append("chip=${vis(chip)} isShown=${chip.isShown} 挂在当前decor=${chip.parent === decor}\n")
+            append("inputRef=${inputRef?.let { "${it.javaClass.simpleName} ${it.width}x${it.height} isShown=${it.isShown}" } ?: "null"}\n")
+            append("listRef=${listRef?.let { "${it.javaClass.simpleName} ${it.width}x${it.height} 子=${it.childCount}" } ?: "null"}\n")
+            append("noListTicks=$noListTicks emptyNotified=$emptyNotified\n")
+            append("距上次调用=${System.currentTimeMillis() - lastCallAt}ms（最短间隔 ${cfg?.minIntervalSec}s）\n")
+            append("cfg: enabled=${cfg?.enabled} skill=${cfg?.skillId} prompt=${cfg?.prompt?.length}字 ctx=${cfg?.ctx}\n")
+            if (msgs == null) {
+                append("解析：列表为空，没跑\n")
+            } else {
+                append("解析出 ${msgs.size} 条；最后一条" +
+                    if (msgs.lastOrNull()?.fromMe == true) "是【我】发的 → 按设计收起卡片（小气泡应仍可见）" else "是对方发的" + "\n")
+                append("最后 3 条：" + msgs.takeLast(3).joinToString(" ‖ ") {
+                    val who = if (it.fromMe) "我" else if (it.who.isNotBlank()) "对方(${it.who})" else "对方"
+                    "$who:${it.text.take(16)}"
+                } + "\n")
+            }
+        }
+    } catch (t: Throwable) {
+        "—— 面板状态 ——\n(生成失败 $t)\n"
+    }
+
+    private fun vis(v: View) = if (v.visibility == View.VISIBLE) "显示" else "隐藏"
+
+    /**
+     * 兜底重挂。
+     *
+     * 有些页面会把 decorView 换掉（Activity 复用、窗口重建），那时卡片还挂在**上一个** decor 上，
+     * 于是「读取一切正常，但屏幕上什么都看不见」。挂错地方时重新挂一次即可。
+     */
+    private fun ensureAttached(decor: ViewGroup) {
+        if (attached && card.parent === decor && chip.parent === decor) return
+        val now = System.currentTimeMillis()
+        if (now - lastAttachTry < 3_000L) return
+        lastAttachTry = now
+        XposedBridge.log("[Goutou] decor 变了，重新挂卡片（card.parent=${card.parent}）")
+        runCatching { (card.parent as? ViewGroup)?.removeView(card) }
+        runCatching { (chip.parent as? ViewGroup)?.removeView(chip) }
+        runCatching { card.removeAllViews() }
+        attached = false
+        attach()
     }
 
     /**
