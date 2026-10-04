@@ -167,7 +167,7 @@ internal class ViewReader(private val a: Activity) {
     private fun readRow(row: View): RowSnapshot {
         val nodes = ArrayList<Pair<TextNode, BubbleHit?>>(6)
         val avatars = ArrayList<AvatarNode>(2)
-        val spoken = ArrayList<TextNode>(3)
+        val spoken = ArrayList<TextNode>(5)
 
         // includeInvisible = true：微信可能把正文放在 INVISIBLE 的占位控件里，
         // 只认 isShown() 会把正文整条漏掉。这里只跳过 GONE。
@@ -193,19 +193,30 @@ internal class ViewReader(private val a: Activity) {
                         }
                         nodes.add(TextNode(text, topOf(v), kind, v.textSize, v.isShown) to bubbleOf(v, row))
                     } else {
-                        collectDesc(v, spoken)
+                        val t = fallbackText(v)
+                        if (t.isNotEmpty()) spoken.add(TextNode(t, topOf(v), Kind.OTHER, 0f, v.isShown))
                     }
                 }
 
                 else -> {
-                    val reflected = reflectText(v)
-                    if (reflected.length >= 2 && reflected.length <= 500 && reflected !in UI_WORDS) {
-                        // 自绘控件的正文，自己拿到手了
-                        nodes.add(
-                            TextNode(reflected, topOf(v), Kind.OTHER, 0f, v.isShown) to bubbleOf(v, row),
-                        )
-                    } else {
-                        collectDesc(v, spoken)
+                    val t = fallbackText(v)
+                    if (t.isNotEmpty()) {
+                        // 正文既不在 TextView 里，那就当成候选正文参与气泡判定
+                        nodes.add(TextNode(t, topOf(v), Kind.OTHER, 0f, v.isShown) to bubbleOf(v, row))
+                    }
+                }
+            }
+        }
+
+        // 第二遍：整行一个字都没读到 —— 那就问无障碍节点（微信自绘正文时通常只在这里留文字）
+        if (nodes.isEmpty() && spoken.isEmpty()) {
+            val budget = intArrayOf(6)
+            walk(row, includeInvisible = true) { v ->
+                if (budget[0] > 0) {
+                    budget[0]--
+                    val a11y = a11yText(v)
+                    if (okText(a11y)) {
+                        nodes.add(TextNode(a11y, topOf(v), Kind.OTHER, 0f, v.isShown) to bubbleOf(v, row))
                     }
                 }
             }
@@ -249,12 +260,14 @@ internal class ViewReader(private val a: Activity) {
         val method = if (textMethods.containsKey(cls)) {
             textMethods[cls]
         } else {
-            val found = try {
-                cls.getMethod("getText").takeIf {
-                    CharSequence::class.java.isAssignableFrom(it.returnType)
+            var found: java.lang.reflect.Method? = null
+            for (name in TEXT_METHODS) {
+                found = try {
+                    cls.getMethod(name).takeIf { CharSequence::class.java.isAssignableFrom(it.returnType) }
+                } catch (t: Throwable) {
+                    null
                 }
-            } catch (t: Throwable) {
-                null
+                if (found != null) break
             }
             textMethods[cls] = found
             found
@@ -266,17 +279,22 @@ internal class ViewReader(private val a: Activity) {
         }
     }
 
-    /**
-     * 无障碍描述兜底。
-     * 正文如果由自绘控件画出来，getText() 是空的；但微信一般会给控件挂一个
-     * contentDescription（否则读屏软件读不了消息），这里把它当最后一道兜底。
-     */
-    private fun collectDesc(v: View, out: MutableList<TextNode>) {
+    /** 第一层兜底：无障碍描述 -> 反射 getText 之类。 */
+    private fun fallbackText(v: View): String {
         val desc = v.contentDescription?.toString()?.trim().orEmpty()
-        if (desc.length < 2 || desc.length > 200) return
-        if (desc in UI_WORDS) return
-        out.add(TextNode(desc, topOf(v), Kind.OTHER, 0f, v.isShown))
+        if (okText(desc)) return desc
+        val reflected = reflectText(v)
+        if (okText(reflected)) return reflected
+        return ""
     }
+
+    private fun a11yText(v: View): String = try {
+        v.createAccessibilityNodeInfo()?.text?.toString()?.trim().orEmpty()
+    } catch (t: Throwable) {
+        ""
+    }
+
+    private fun okText(s: String): Boolean = s.length in 2..200 && s !in UI_WORDS
 
     /**
      * 认不出气泡容器时的兜底：
@@ -318,13 +336,21 @@ internal class ViewReader(private val a: Activity) {
         sb.append("候选列表: ").append(lastCandidates).append(NL)
         if (list != null) {
             for (r in 0 until minOf(rowCount, list.childCount)) {
-                if (sb.length > 3400) break
+                if (sb.length > 5600) break
                 val row = list.getChildAt(r)
                 sb.append("行").append(r).append(' ').append(describe(row)).append(NL)
-                dumpRow(sb, row, 14)
+                // 先给出「读取器对这几行的判定」，一眼看出卡在哪
+                val snap = runCatching { readRow(row) }.getOrNull()
+                sb.append("  判定: 气泡=")
+                    .append(snap?.bubble?.text?.take(20) ?: "null")
+                    .append(" 头像=").append(snap?.avatars?.size ?: 0)
+                    .append(" 文字=")
+                    .append(snap?.texts?.take(4)?.joinToString("|") { it.kind.name + ":" + it.text.take(12) } ?: "-")
+                    .append(NL)
+                dumpRow(sb, row, 40)
             }
         }
-        return sb.toString().take(3800)
+        return sb.toString().take(6200)
     }
 
     /**
@@ -335,7 +361,7 @@ internal class ViewReader(private val a: Activity) {
     private fun dumpRow(sb: StringBuilder, row: View, maxEntries: Int) {
         var count = 0
         fun dump(v: View, depth: Int) {
-            if (count >= maxEntries || sb.length > 3400) return
+            if (count >= maxEntries || sb.length > 5600) return
             count++
             sb.append("  ".repeat(depth))
                 .append('#').append(count - 1).append(' ')
@@ -360,7 +386,9 @@ internal class ViewReader(private val a: Activity) {
                 if (a11y.isNotEmpty()) sb.append(" a=\"").append(a11y.take(18)).append('"')
             }
             sb.append(NL)
-            if (v is ViewGroup && depth < 4) {
+            // 头像（正方形）那层不展开，省下预算给气泡内部
+            val avatarLike = v is ImageView && v.width in dp(24)..dp(84) && abs(v.width - v.height) <= dp(4)
+            if (v is ViewGroup && depth < 5 && !avatarLike) {
                 for (i in 0 until minOf(v.childCount, 12)) dump(v.getChildAt(i), depth + 1)
             }
         }
@@ -511,6 +539,9 @@ internal class ViewReader(private val a: Activity) {
     private companion object {
         /** 避免在源码里写转义序列。 */
         val NL: String = System.lineSeparator()
+
+        /** 反射取正文时依次尝试的方法名。 */
+        val TEXT_METHODS = listOf("getText", "getTextContent", "getTextString", "getMessage")
 
         /** 纯 UI 文案的无障碍描述，不当消息正文。 */
         val UI_WORDS = setOf(
