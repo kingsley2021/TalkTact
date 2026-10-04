@@ -46,6 +46,9 @@ internal class ViewReader(private val a: Activity) {
     private val scratch: Bitmap by lazy { Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888) }
     private val canvas = Canvas()
     private val bubbleCache = WeakHashMap<View, BubbleHit>()
+
+    /** 类 -> 它的 getText() 方法（null 表示这个类没有）。只查一次。 */
+    private val textMethods = HashMap<Class<*>, java.lang.reflect.Method?>()
     private val pageBg: Int by lazy { detectPageBackground() }
 
     /** 上一次 findList 的候选情况，只用于诊断输出。 */
@@ -194,7 +197,17 @@ internal class ViewReader(private val a: Activity) {
                     }
                 }
 
-                else -> collectDesc(v, spoken)
+                else -> {
+                    val reflected = reflectText(v)
+                    if (reflected.length >= 2 && reflected.length <= 500 && reflected !in UI_WORDS) {
+                        // 自绘控件的正文，自己拿到手了
+                        nodes.add(
+                            TextNode(reflected, topOf(v), Kind.OTHER, 0f, v.isShown) to bubbleOf(v, row),
+                        )
+                    } else {
+                        collectDesc(v, spoken)
+                    }
+                }
             }
         }
 
@@ -223,6 +236,34 @@ internal class ViewReader(private val a: Activity) {
         }
 
         return RowSnapshot(bubble, texts, avatars)
+    }
+
+    /**
+     * 反射兜底取正文。
+     *
+     * 微信的自绘正文控件不继承 TextView，但很多这类控件仍然保留一个 `getText()` 方法
+     * （它们自己也要序列化/复制文本）。每个类只查一次方法，查不到就记住 null。
+     */
+    private fun reflectText(v: View): String {
+        val cls = v.javaClass
+        val method = if (textMethods.containsKey(cls)) {
+            textMethods[cls]
+        } else {
+            val found = try {
+                cls.getMethod("getText").takeIf {
+                    CharSequence::class.java.isAssignableFrom(it.returnType)
+                }
+            } catch (t: Throwable) {
+                null
+            }
+            textMethods[cls] = found
+            found
+        } ?: return ""
+        return try {
+            (method.invoke(v) as? CharSequence)?.toString()?.trim().orEmpty()
+        } catch (t: Throwable) {
+            ""
+        }
     }
 
     /**
@@ -306,6 +347,10 @@ internal class ViewReader(private val a: Activity) {
             if (text.isNotEmpty()) sb.append(" t=\"").append(text.take(18)).append('"')
             val desc = v.contentDescription?.toString()?.trim().orEmpty()
             if (desc.isNotEmpty()) sb.append(" d=\"").append(desc.take(18)).append('"')
+            if (text.isEmpty() && desc.isEmpty() && v !is ViewGroup) {
+                val reflected = reflectText(v)
+                if (reflected.isNotEmpty()) sb.append(" r=\"").append(reflected.take(18)).append('"')
+            }
             if (text.isEmpty() && desc.isEmpty() && v !is ViewGroup && count <= 10) {
                 val a11y = try {
                     v.createAccessibilityNodeInfo()?.text?.toString()?.trim().orEmpty()
