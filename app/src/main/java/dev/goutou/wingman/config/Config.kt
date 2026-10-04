@@ -59,6 +59,15 @@ data class ConfigData(
     val skillId: String = "classic",
 ) {
     companion object {
+        /** 老版本存过的 max_tokens 不在四档里（比如 500），归一化到最近的档，免得设置页四档都没选中。 */
+        fun snapTier(v: Int): Int = when {
+            v <= 0 -> 0
+            v <= 300 -> 200
+            v <= 500 -> 400
+            v <= 800 -> 600
+            else -> 0
+        }
+
         fun from(p: SharedPreferences): ConfigData = ConfigData(
             baseUrl = p.getString(Keys.BASE, DEFAULT_BASE).orEmpty().ifBlank { DEFAULT_BASE },
             apiKey = p.getString(Keys.KEY, "").orEmpty(),
@@ -71,7 +80,7 @@ data class ConfigData(
             bgDim = p.getFloat(Keys.BG_DIM, 0.30f).coerceIn(0f, 0.8f),
             skillId = p.getString(Keys.SKILL, "classic").orEmpty().ifBlank { "classic" },
             temperature = p.getFloat(Keys.TEMPERATURE, 0.8f).toDouble(),
-            maxTokens = p.getInt(Keys.MAX_TOKENS, 400).coerceIn(0, 2000),
+            maxTokens = snapTier(p.getInt(Keys.MAX_TOKENS, 400)),
             minIntervalSec = p.getInt(Keys.MIN_INTERVAL, 15).coerceIn(0, 600),
             allowSensitive = p.getBoolean(Keys.SENSITIVE, false),
         )
