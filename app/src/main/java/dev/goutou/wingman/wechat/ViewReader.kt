@@ -8,6 +8,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.NinePatchDrawable
 import android.view.View
+import android.view.ViewParent
 import android.view.ViewGroup
 import android.widget.AbsListView
 import android.widget.EditText
@@ -58,19 +59,23 @@ internal class ViewReader(private val a: Activity) {
     }
 
     /**
-     * 选「消息列表」。这是最容易出错的一步，所以规则写得啰嗦一点。
+     * 选「消息列表」。
      *
-     * v0.2.0（以及 v0.1）取的是深度优先遇到的**第一个** AbsListView/RecyclerView，
-     * 完全不看它在屏幕的什么位置 —— 于是很容易选中输入框下方那个表情/更多功能的宫格：
-     * 它也是 AbsListView，每一格都是 ImageView，加起来就是「读到的全是图片」。
+     * 这里的判据是被真机数据打过脸的，改动前先看线上诊断（长按卡片标题）：
      *
-     * 现在以输入框为锚点，只接受同时满足这几条的容器：
-     * 在屏幕上 / 完全位于输入框上方 / 高度不小于屏幕 22% / 至少 2 个子视图（避免选到只包一层的壳）。
-     * 多个候选取面积最大的。
+     * 微信 8.0.78 实测：屏幕 1156x2306、输入框在 y=2228，
+     * 而消息列表是 `MMChattingListView` / `ScrollControlRecyclerView`，1156x**2450** @ y=0
+     * —— 列表高度会伸到输入框下面（输入框是浮在列表上层的）。
+     * 所以「要求列表完全位于输入框上方」是错的：真列表会被自己误杀，
+     * 只剩下输入框下面的表情/更多功能宫格来充数（那就是「读到的全是图片」）。
+     *
+     * 现在只要求：起于输入框上方、在屏幕上、内部不含输入框（排除页面级容器）、
+     * 够高、子视图≥2。多个候选取面积最大者，面积相同取子视图多的那个。
      */
     fun findList(root: View, input: View?): ViewGroup? {
         val inputTop = input?.let { topOf(it) } ?: height
-        val candidates = ArrayList<ViewGroup>()
+        val strict = ArrayList<ViewGroup>()
+        val relaxed = ArrayList<ViewGroup>()
         val rejected = ArrayList<String>()
 
         walk(root) { v ->
@@ -91,25 +96,53 @@ internal class ViewReader(private val a: Activity) {
             if (!looksList) return@walk
 
             val onScreen = loc[0] < width && loc[0] + w > 0 && bottom > 0 && top < height
-            val aboveInput = bottom <= inputTop + dp(8)
+            // 起点在输入框上方即可，不要求整个都在上方（见上面的线上数据）
+            val startsAboveInput = top < inputTop
+            // 内部装着输入框的，是页面级容器，不是消息列表
+            val holdsInput = input != null && isAncestor(v, input)
             val tallEnough = h >= height * 0.22
             val multiChild = v.childCount >= 2
 
-            if (onScreen && aboveInput && tallEnough && multiChild) {
-                candidates.add(v)
-            } else {
-                rejected.add(
-                    describe(v) + " [" +
-                        (if (!onScreen) "不在屏幕上 " else "") +
-                        (if (!aboveInput) "伸到输入框下方 " else "") +
-                        (if (!tallEnough) "太矮 " else "") +
-                        (if (!multiChild) "子视图<2 " else "") + "]",
-                )
+            val fatal = buildString {
+                if (!onScreen) append("不在屏幕上 ")
+                if (!startsAboveInput) append("起点在输入框下方 ")
+                if (holdsInput) append("内部含输入框(页面容器) ")
+            }.trim()
+            val soft = buildString {
+                if (!tallEnough) append("太矮 ")
+                if (!multiChild) append("子视图<2 ")
+            }.trim()
+
+            when {
+                fatal.isNotEmpty() -> rejected.add(describe(v) + " [$fatal]")
+                soft.isEmpty() -> strict.add(v)
+                else -> relaxed.add(describe(v) + " [$soft]")
             }
         }
 
-        lastCandidates = "入选=${candidates.size}；排除=${rejected.take(6).joinToString(" / ").ifEmpty { "无" }}"
-        return candidates.maxWithOrNull(compareBy({ it.width.toLong() * it.height }, { it.childCount }))
+        // 严格条件全落空时，用放宽的池子兜底（位置条件不放松）
+        val pool = if (strict.isNotEmpty()) strict else ArrayList()
+        val chosen = pool.maxWithOrNull(compareBy({ it.width.toLong() * it.height }, { it.childCount }))
+        if (chosen == null) {
+            lastCandidates = "入选=0；位置不合格=${rejected.take(6).joinToString(" / ").ifEmpty { "无" }}；" +
+                "仅差高度/子视图=${relaxed.take(3).joinToString(" / ").ifEmpty { "无" }}"
+        } else {
+            lastCandidates = "入选=${strict.size}，选中=${describe(chosen)}；" +
+                "仅差高度/子视图=${relaxed.take(3).joinToString(" / ").ifEmpty { "无" }}；" +
+                "位置不合格=${rejected.take(4).joinToString(" / ").ifEmpty { "无" }}"
+        }
+        return chosen
+    }
+
+    /** 判断 parent 是否是 child 的祖先（往上走，比往下遍历便宜）。 */
+    private fun isAncestor(parent: View, child: View): Boolean {
+        var p: ViewParent? = child.parent
+        var guard = 0
+        while (p is View && guard++ < 60) {
+            if (p === parent) return true
+            p = p.parent
+        }
+        return false
     }
 
     /** 上一次 findList 的候选情况，只用于诊断输出。 */
