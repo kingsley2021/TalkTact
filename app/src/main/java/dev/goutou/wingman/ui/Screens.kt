@@ -109,6 +109,8 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
     val beat = remember(tick) { store.heartbeatAt() }
     val diag = remember(tick) { store.diag() }
     val diagAt = remember(tick) { store.diagAt() }
+    val lastCall = remember(tick) { store.lastCall() }
+    val lastCallAt = remember(tick) { store.lastCallAt() }
     var probeResult by remember { mutableStateOf<String?>(null) }
     var probeOk by remember { mutableStateOf(false) }
     var probing by remember { mutableStateOf(false) }
@@ -280,6 +282,26 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                         onClick = { clipboard.setText(AnnotatedString(diag)) },
                         shape = RoundedCornerShape(14.dp),
                     ) { Text("复制诊断") }
+                }
+            }
+        }
+        if (lastCall.isNotBlank()) {
+            item {
+                GlassCard(glass, border = palette.primary.copy(alpha = 0.45f)) {
+                    Text("最近一次调用（注入侧真正发出去的）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                    Text(
+                        "发生于 ${formatTime(lastCallAt)} · 这里是微信进程实际拿去调接口的那一份，不是本 App 里的配置。" +
+                            "核对「当前军师」有没有真的生效，看 system 长度那一行。",
+                        fontSize = 12.sp,
+                        color = palette.sub,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(lastCall, fontSize = 10.sp, color = palette.text)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { clipboard.setText(AnnotatedString(lastCall)) },
+                        shape = RoundedCornerShape(14.dp),
+                    ) { Text("复制这一段") }
                 }
             }
         }

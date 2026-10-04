@@ -22,11 +22,18 @@ object Heartbeat {
      */
     const val PERMISSION = "dev.goutou.wingman.permission.HEARTBEAT"
 
-    fun send(context: Context, tokens: Int, diag: String? = null, learned: String? = null) {
+    fun send(
+        context: Context,
+        tokens: Int,
+        diag: String? = null,
+        learned: String? = null,
+        call: String? = null,
+    ) {
         try {
             val intent = Intent(ACTION).setPackage(MODULE_PKG).putExtra("tokens", tokens)
             if (diag != null) intent.putExtra("diag", diag)
             if (learned != null) intent.putExtra("learned", learned)
+            if (call != null) intent.putExtra("call", call)
             context.sendBroadcast(intent, PERMISSION)
         } catch (t: Throwable) {
             // 广播失败不影响主流程
@@ -51,6 +58,10 @@ class HeartbeatReceiver : BroadcastReceiver() {
         intent.getStringExtra("diag")?.let {
             editor.putString(Keys.DIAG, it)
             editor.putLong(Keys.DIAG_AT, System.currentTimeMillis())
+        }
+        intent.getStringExtra("call")?.let {
+            editor.putString(Keys.LAST_CALL, it)
+            editor.putLong(Keys.LAST_CALL_AT, System.currentTimeMillis())
         }
         editor.apply()
     }

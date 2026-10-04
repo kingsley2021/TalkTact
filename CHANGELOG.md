@@ -1,5 +1,24 @@
 # 变更记录
 
+## v0.3.2
+
+**新增：「最近一次调用」存档（排查 skill 到底生效没有）**
+
+起因：反馈说用满血版时回复里蹦出 ConstraintLayout / RelativeLayout 这类 Android 类名，但那次聊天里**没人提过任何技术词**。
+
+已排除「模块把类名漏给模型」：发给模型的聊天记录只由 `我/对方: 文本` 拼成，`ViewReader` 的 `javaClass.name` 只进诊断字符串。
+所以就剩一种可能 —— **注入侧实际发出去的 system 提示词，跟 App 里显示的那个不是同一份**。
+
+两条读取路径本来就不同：
+- App（本进程）：`ConfigStore` → `Context.getSharedPreferences`
+- 微信进程（注入侧）：`XSharedPreferences` + 靠 `file.lastModified()` 变化才 `reload()`
+
+现在把注入侧**真正发出去的那一份**存下来：`system 长度` + system 开头 300 字 + user 消息 + 模型原始返回，
+经心跳广播回传，显示在「运行状态」页的新卡片里，可一键复制。
+
+字数指纹（拿去对）：`原版 = 657 字` / `满血版 = 1904 字` / `程序员搭子 = 644 字`。
+
+
 ## v0.3.1
 
 **修：满血版回复里会蹦出 Android 类名（ConstraintLayout / RelativeLayout 这种）**

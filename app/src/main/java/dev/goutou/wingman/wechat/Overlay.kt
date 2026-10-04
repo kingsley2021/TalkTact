@@ -400,14 +400,16 @@ internal class Panel(private val a: Activity) {
             var suggestion: Suggestion? = null
             var tokens = 0
             var error: Throwable? = null
+            var trace = ""
             try {
-                val result = LlmClient(cfg).analyze(msgs)
+                val result = LlmClient(cfg, onTrace = { trace = it }).analyze(msgs)
                 suggestion = result.suggestion
                 tokens = result.totalTokens
             } catch (t: Throwable) {
                 error = t
             }
-            if (tokens > 0) Heartbeat.send(a, tokens)
+            // 顺带回传「这次实际发出去的那一份」，App 首页可以对着核对 skill 有没有真的生效
+            Heartbeat.send(a, tokens, call = trace.takeIf { it.isNotBlank() })
             val ok = suggestion
             val err = error
             handler.post {

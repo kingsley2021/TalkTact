@@ -27,6 +27,8 @@ object Keys {
     const val TOKENS = "stat_tokens"
     const val DIAG = "diag"
     const val DIAG_AT = "diag_at"
+    const val LAST_CALL = "last_call"
+    const val LAST_CALL_AT = "last_call_at"
     const val LEARNED = "learned_classes"
     const val GLASS = "glass_alpha"
     const val GLASS_BLUR = "glass_blur"
@@ -149,6 +151,15 @@ class ConfigStore(context: Context) {
     fun diag(): String = sp.getString(Keys.DIAG, "").orEmpty()
 
     fun diagAt(): Long = sp.getLong(Keys.DIAG_AT, 0L)
+
+    /**
+     * 注入侧回传的「最近一次真正发出去的请求」存档。
+     * 排查「App 里选的是 A，用起来像 B」时必须看它 —— App 显示的是本进程读到的配置，
+     * 而这里是微信进程实际拿去调接口的那一份，两者走的读取路径完全不同。
+     */
+    fun lastCall(): String = sp.getString(Keys.LAST_CALL, "").orEmpty()
+
+    fun lastCallAt(): Long = sp.getLong(Keys.LAST_CALL_AT, 0L)
 
     /** 已经学会「自己画字」的控件类（模块下次启动就先挂钩子）。 */
     fun learnedClasses(): Set<String> = sp.getStringSet(Keys.LEARNED, emptySet()).orEmpty()

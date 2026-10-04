@@ -16,13 +16,21 @@ data class LlmResult(val suggestion: Suggestion, val totalTokens: Int, val milli
  * 而微信自己也打包了 okhttp/okio，parent-first 的类加载会先拿到它那份，
  * 版本不一致就是 NoSuchMethodError。系统 API 没有撞车问题，也不用多带依赖。
  */
-class LlmClient(private val cfg: ConfigData) {
+class LlmClient(
+    private val cfg: ConfigData,
+    /** 把「这次实际发出去的东西」交出去存档，null = 不记 */
+    private val onTrace: ((String) -> Unit)? = null,
+) {
 
     fun analyze(msgs: List<ChatMsg>): LlmResult {
         if (cfg.apiKey.isBlank()) throw LlmException("还没填 API Key", "到「设置」里填地址和 Key")
         if (msgs.isEmpty()) throw LlmException("没读到聊天内容", null)
 
         val start = System.currentTimeMillis()
+        // 先落成两个局部变量：trace 要能原样看到「发出去的是什么」，不能只看 cfg
+        val systemText = cfg.prompt
+        val userText = "聊天记录（时间顺序，最后一条是对方刚发的）：\n${msgs.asTranscript()}\n\n" +
+            "只输出系统要求的那个 JSON 对象，不要任何解释文字。"
         val fields = LinkedHashMap<String, JsonValue>()
         fields["model"] = str(cfg.model)
         fields["temperature"] = num(cfg.temperature)
@@ -30,27 +38,41 @@ class LlmClient(private val cfg: ConfigData) {
         if (cfg.maxTokens > 0) fields["max_tokens"] = num(cfg.maxTokens)
         fields["messages"] = arr(
             listOf(
-                obj("role" to str("system"), "content" to str(cfg.prompt)),
-                obj(
-                    "role" to str("user"),
-                    "content" to str(
-                        "聊天记录（时间顺序，最后一条是对方刚发的）：\n${msgs.asTranscript()}\n\n" +
-                            "只输出系统要求的那个 JSON 对象，不要任何解释文字。",
-                    ),
-                ),
+                obj("role" to str("system"), "content" to str(systemText)),
+                obj("role" to str("user"), "content" to str(userText)),
             ),
         )
         val payload = Json.encode(JsonValue.Obj(fields))
-        val root = parseResponse(post(endpoint(cfg.baseUrl), payload))
-        val content = root.at("choices", "0", "message", "content").asStr()
-            ?: throw LlmException("返回里没有 choices[0].message.content", "确认模型名是否可用、该接口是否兼容 OpenAI 格式")
-        val tokens = root.at("usage", "total_tokens").asInt() ?: 0
-        return LlmResult(
-            suggestion = SuggestionParser.parse(content),
-            totalTokens = tokens,
-            millis = System.currentTimeMillis() - start,
-            model = root.at("model").asStr() ?: cfg.model,
-        )
+        try {
+            val root = parseResponse(post(endpoint(cfg.baseUrl), payload))
+            val content = root.at("choices", "0", "message", "content").asStr()
+                ?: throw LlmException("返回里没有 choices[0].message.content", "确认模型名是否可用、该接口是否兼容 OpenAI 格式")
+            trace(systemText, userText, content)
+            val tokens = root.at("usage", "total_tokens").asInt() ?: 0
+            return LlmResult(
+                suggestion = SuggestionParser.parse(content),
+                totalTokens = tokens,
+                millis = System.currentTimeMillis() - start,
+                model = root.at("model").asStr() ?: cfg.model,
+            )
+        } catch (t: Throwable) {
+            trace(systemText, userText, "（请求失败）${t.message}")
+            throw t
+        }
+    }
+
+    /** 把这次实际发出去的 system 提示词 / user 消息 / 模型原始返回交给调用方存档。 */
+    private fun trace(systemText: String, userText: String, response: String) {
+        val cb = onTrace ?: return
+        val body = buildString {
+            append("system 长度 = ${systemText.length} 字\n")
+            append("-------- system 开头 300 字 --------\n")
+            append(systemText.take(300))
+            if (systemText.length > 300) append("\n…（后面省略 ${systemText.length - 300} 字）")
+            append("\n\n-------- user 消息 --------\n").append(userText)
+            append("\n\n-------- 模型原始返回 --------\n").append(response.take(1200))
+        }
+        runCatching { cb(body) }
     }
 
     /** 首页「接口自检」调它：真发一次最小请求，把延迟和用量报回来。 */
