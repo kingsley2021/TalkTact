@@ -15,7 +15,14 @@ enum class Side { ME, OTHER, UNKNOWN }
 /** 行内文字块的类型（由 ViewReader 标注）。 */
 enum class Kind { BUBBLE, NICKNAME, TIMESTAMP, TAG, OTHER }
 
-data class TextNode(val text: String, val top: Int, val kind: Kind = Kind.OTHER, val size: Float = 0f)
+data class TextNode(
+    val text: String,
+    val top: Int,
+    val kind: Kind = Kind.OTHER,
+    val size: Float = 0f,
+    /** 控件是否真的可见。微信会把正文放在 INVISIBLE 的占位控件里，所以只当参考权重用。 */
+    val visible: Boolean = true,
+)
 
 data class AvatarNode(val centerX: Int, val top: Int, val size: Int)
 
