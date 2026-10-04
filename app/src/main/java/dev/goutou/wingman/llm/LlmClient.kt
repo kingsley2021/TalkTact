@@ -23,26 +23,24 @@ class LlmClient(private val cfg: ConfigData) {
         if (msgs.isEmpty()) throw LlmException("没读到聊天内容", null)
 
         val start = System.currentTimeMillis()
-        val payload = Json.encode(
-            obj(
-                "model" to str(cfg.model),
-                "temperature" to num(cfg.temperature),
-                "max_tokens" to num(cfg.maxTokens),
-                "messages" to arr(
-                    listOf(
-                        obj("role" to str("system"), "content" to str(cfg.prompt)),
-                        obj(
-                            "role" to str("user"),
-                            "content" to str(
-                                "聊天记录（时间顺序，最后一条是对方刚发的）：\n${msgs.asTranscript()}\n\n" +
-                                    "只输出系统要求的那个 JSON 对象，不要任何解释文字。",
-                            ),
-                        ),
+        val fields = LinkedHashMap<String, JsonValue>()
+        fields["model"] = str(cfg.model)
+        fields["temperature"] = num(cfg.temperature)
+        // 0 = 无限制：干脆不传这个参数，交给服务端默认
+        if (cfg.maxTokens > 0) fields["max_tokens"] = num(cfg.maxTokens)
+        fields["messages"] = arr(
+            listOf(
+                obj("role" to str("system"), "content" to str(cfg.prompt)),
+                obj(
+                    "role" to str("user"),
+                    "content" to str(
+                        "聊天记录（时间顺序，最后一条是对方刚发的）：\n${msgs.asTranscript()}\n\n" +
+                            "只输出系统要求的那个 JSON 对象，不要任何解释文字。",
                     ),
                 ),
             ),
         )
-
+        val payload = Json.encode(JsonValue.Obj(fields))
         val root = parseResponse(post(endpoint(cfg.baseUrl), payload))
         val content = root.at("choices", "0", "message", "content").asStr()
             ?: throw LlmException("返回里没有 choices[0].message.content", "确认模型名是否可用、该接口是否兼容 OpenAI 格式")

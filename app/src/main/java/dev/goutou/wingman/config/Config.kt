@@ -28,6 +28,10 @@ object Keys {
     const val DIAG = "diag"
     const val DIAG_AT = "diag_at"
     const val LEARNED = "learned_classes"
+    const val GLASS = "glass_alpha"
+    const val BG_URI = "bg_uri"
+    const val BG_DIM = "bg_dim"
+    const val SKILL = "skill_id"
 }
 
 data class ConfigData(
@@ -39,11 +43,20 @@ data class ConfigData(
     /** 参考最近几条消息（2..20） */
     val ctx: Int = 8,
     val temperature: Double = 0.8,
-    val maxTokens: Int = 500,
+    /** 0 = 不传 max_tokens（「无限制」档）；其余按 200/400/600 三档 */
+    val maxTokens: Int = 400,
     /** 两次自动分析之间的最短间隔，防止刷屏式调用把额度烧完 */
     val minIntervalSec: Int = 15,
     /** 关掉的话，命中敏感内容时不会再拦你 */
     val allowSensitive: Boolean = false,
+    /** 玻璃面板不透明度：1 = 不透明，越小越透（0.30..1.00） */
+    val glassAlpha: Float = 0.92f,
+    /** 自定义背景图（OpenDocument 的持久化 URI），空 = 用默认渐变 */
+    val bgUri: String = "",
+    /** 背景压暗程度，保证玻璃上的字看得清 */
+    val bgDim: Float = 0.30f,
+    /** 当前选中的 skill：classic / coder / custom */
+    val skillId: String = "classic",
 ) {
     companion object {
         fun from(p: SharedPreferences): ConfigData = ConfigData(
@@ -53,8 +66,12 @@ data class ConfigData(
             prompt = p.getString(Keys.PROMPT, null).orEmpty().ifBlank { DEFAULT_PROMPT },
             enabled = p.getBoolean(Keys.ENABLED, true),
             ctx = p.getInt(Keys.CTX, 8).coerceIn(2, 20),
+            glassAlpha = p.getFloat(Keys.GLASS, 0.92f).coerceIn(0.30f, 1f),
+            bgUri = p.getString(Keys.BG_URI, "").orEmpty(),
+            bgDim = p.getFloat(Keys.BG_DIM, 0.30f).coerceIn(0f, 0.8f),
+            skillId = p.getString(Keys.SKILL, "classic").orEmpty().ifBlank { "classic" },
             temperature = p.getFloat(Keys.TEMPERATURE, 0.8f).toDouble(),
-            maxTokens = p.getInt(Keys.MAX_TOKENS, 500).coerceIn(64, 2000),
+            maxTokens = p.getInt(Keys.MAX_TOKENS, 400).coerceIn(0, 2000),
             minIntervalSec = p.getInt(Keys.MIN_INTERVAL, 15).coerceIn(0, 600),
             allowSensitive = p.getBoolean(Keys.SENSITIVE, false),
         )
@@ -91,6 +108,10 @@ class ConfigStore(context: Context) {
             .putInt(Keys.MAX_TOKENS, d.maxTokens)
             .putInt(Keys.MIN_INTERVAL, d.minIntervalSec)
             .putBoolean(Keys.SENSITIVE, d.allowSensitive)
+            .putFloat(Keys.GLASS, d.glassAlpha.coerceIn(0.30f, 1f))
+            .putString(Keys.BG_URI, d.bgUri)
+            .putFloat(Keys.BG_DIM, d.bgDim.coerceIn(0f, 0.8f))
+            .putString(Keys.SKILL, d.skillId)
             .apply()
     }
 
