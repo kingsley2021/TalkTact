@@ -852,10 +852,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
         ScreenHeader("角色", "每个人一份档案，直接影响生成") {
-            TextButton(onClick = {
-                tick++
-                diagAskedMarker()
-            }) { Text("刷新") }
+            TextButton(onClick = { tick++ }) { Text("刷新") }
         }
 
         GlassCard(glassAlpha) {
@@ -904,8 +901,6 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
     }
 }
 
-/** 列表页那行小字用的，避免误加状态；留着是为了和别的页面风格一致。 */
-private fun diagAskedMarker() = Unit
 
 @Composable
 private fun RoleDetail(store: ConfigStore, role: Role, glassAlpha: Float, onBack: () -> Unit) {
