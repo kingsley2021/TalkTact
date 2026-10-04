@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.goutou.wingman.ModuleStatus
 import dev.goutou.wingman.config.ConfigData
+import dev.goutou.wingman.config.Backup
 import dev.goutou.wingman.config.ConfigStore
 import dev.goutou.wingman.config.Role
 import dev.goutou.wingman.llm.BUILT_IN_SKILLS
@@ -649,6 +650,8 @@ fun SettingsScreen(
     val context = LocalContext.current
     var d by remember { mutableStateOf(ui) }
     var saved by remember { mutableStateOf(false) }
+    var includeKey by remember { mutableStateOf(true) }
+    var backupNote by remember { mutableStateOf<String?>(null) }
 
     fun update(next: ConfigData) {
         d = next
@@ -664,6 +667,39 @@ fun SettingsScreen(
                 // 有的来源不支持持久化授权，那就只在本次运行里有效
             }
             update(d.copy(bgUri = uri.toString()))
+        }
+    }
+
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) {
+            backupNote = try {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(Backup.export(store.load(), store.roles(), includeKey).toByteArray(Charsets.UTF_8))
+                }
+                "已导出到所选文件"
+            } catch (t: Throwable) {
+                "导出失败：${t.message}"
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            backupNote = try {
+                val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                val result = Backup.import(text, store.load(), store.roles())
+                if (result == null) {
+                    "导入失败：不是有效的备份文件"
+                } else {
+                    store.save(result.config)
+                    store.saveRoles(result.roles)
+                    d = store.load()
+                    onSaved()
+                    "已导入：配置 + ${result.roleCount} 个角色"
+                }
+            } catch (t: Throwable) {
+                "导入失败：${t.message}"
+            }
         }
     }
 
@@ -804,6 +840,42 @@ fun SettingsScreen(
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
             ) { Text(if (saved) "已保存（微信里下次识别即生效）" else "保存") }
+        }
+
+        GlassCard(d.glassAlpha) {
+            Text("备份 / 迁移", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text(
+                "换包名、换手机的时候用：导出成一个 json 文件，装好新的再导入回来。\n" +
+                    "导入是合并：角色只覆盖同名的，备份里没有的会保留。",
+                fontSize = 12.sp,
+                color = palette.sub,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("导出时包含 API Key", fontSize = 13.sp, color = palette.text)
+                    Text("开了的话导出文件里有明文 Key，别往公开地方放", fontSize = 11.sp, color = palette.sub)
+                }
+                Switch(checked = includeKey, onCheckedChange = { includeKey = it })
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = { exportLauncher.launch(Backup.FILE_NAME) },
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                ) { Text("导出配置") }
+                OutlinedButton(
+                    onClick = { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text("导入配置") }
+            }
+            backupNote?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, fontSize = 12.sp, color = if (it.startsWith("已")) palette.ok else palette.bad)
+            }
         }
 
         GlassCard(d.glassAlpha) {
