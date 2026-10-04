@@ -29,6 +29,7 @@ object Keys {
     const val DIAG_AT = "diag_at"
     const val LEARNED = "learned_classes"
     const val GLASS = "glass_alpha"
+    const val GLASS_BLUR = "glass_blur"
     const val BG_URI = "bg_uri"
     const val BG_DIM = "bg_dim"
     const val SKILL = "skill_id"
@@ -51,6 +52,8 @@ data class ConfigData(
     val allowSensitive: Boolean = false,
     /** 玻璃面板不透明度：1 = 不透明，越小越透（0.30..1.00） */
     val glassAlpha: Float = 0.92f,
+    /** 玻璃面板背后的真实背景模糊半径（dp，0 = 不模糊）。只在设了自定义背景图时看得出来。 */
+    val glassBlur: Float = 24f,
     /** 自定义背景图（OpenDocument 的持久化 URI），空 = 用默认渐变 */
     val bgUri: String = "",
     /** 背景压暗程度，保证玻璃上的字看得清 */
@@ -76,6 +79,7 @@ data class ConfigData(
             enabled = p.getBoolean(Keys.ENABLED, true),
             ctx = p.getInt(Keys.CTX, 8).coerceIn(2, 20),
             glassAlpha = p.getFloat(Keys.GLASS, 0.92f).coerceIn(0.30f, 1f),
+            glassBlur = p.getFloat(Keys.GLASS_BLUR, 24f).coerceIn(0f, 48f),
             bgUri = p.getString(Keys.BG_URI, "").orEmpty(),
             bgDim = p.getFloat(Keys.BG_DIM, 0.30f).coerceIn(0f, 0.8f),
             skillId = p.getString(Keys.SKILL, "classic").orEmpty().ifBlank { "classic" },
@@ -118,6 +122,7 @@ class ConfigStore(context: Context) {
             .putInt(Keys.MIN_INTERVAL, d.minIntervalSec)
             .putBoolean(Keys.SENSITIVE, d.allowSensitive)
             .putFloat(Keys.GLASS, d.glassAlpha.coerceIn(0.30f, 1f))
+            .putFloat(Keys.GLASS_BLUR, d.glassBlur.coerceIn(0f, 48f))
             .putString(Keys.BG_URI, d.bgUri)
             .putFloat(Keys.BG_DIM, d.bgDim.coerceIn(0f, 0.8f))
             .putString(Keys.SKILL, d.skillId)

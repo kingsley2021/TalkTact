@@ -6,13 +6,13 @@ import android.net.Uri
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -54,14 +54,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.goutou.wingman.ModuleStatus
@@ -72,13 +83,14 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * 配色 + 玻璃参数。
  *
- * 「液态玻璃」的真实背景模糊需要 API 31+（Modifier.blur 走 RenderEffect），
- * 低版本上会自动退化成「不模糊但半透明」，观感仍然成立：
- * 背景层放柔光/图片 → 面板用半透明白 + 顶部高光渐变 + 1px 亮边。
+ * 「液态玻璃」= 面板后面压一块**真正被模糊过的背景**（Modifier.blur 走 RenderEffect）。
+ * 因为 minSdk = 31（Android 12），这里不再需要低版本降级分支。
  */
 data class Palette(
     val primary: Color,
@@ -133,6 +145,34 @@ private val DarkPalette = Palette(
 
 val LocalPalette = staticCompositionLocalOf { LightPalette }
 
+/**
+ * 背景内容。图片在这里解码**一次**，所有玻璃面板共用，
+ * 免得每个面板各自 produceState 重新解码一遍。
+ */
+data class Backdrop(
+    val bitmap: ImageBitmap?,
+    val dim: Float,
+    val bgTop: Color,
+    val bgBottom: Color,
+    val primary: Color,
+    /** 玻璃面板背后的模糊半径（dp） */
+    val blur: Dp,
+)
+
+val LocalBackdrop = staticCompositionLocalOf {
+    Backdrop(
+        bitmap = null,
+        dim = 0f,
+        bgTop = Color(0xFFF3EEFC),
+        bgBottom = Color(0xFFE3E1F3),
+        primary = Color(0xFF7C3AED),
+        blur = 24.dp,
+    )
+}
+
+/** 根容器尺寸（px）。玻璃面板靠它把整屏背景平移对齐到自己身上。 */
+val LocalRootSize = staticCompositionLocalOf { IntSize.Zero }
+
 @Composable
 fun GoutouTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
@@ -149,61 +189,62 @@ fun GoutouTheme(content: @Composable () -> Unit) {
     }
 }
 
-// ================= 背景层 =================
+// ================= 背景绘制 =================
+
+/**
+ * 把「整屏背景」画一遍。
+ *
+ * 调用方负责先把坐标系平移到目标区域（面板）再裁剪，所以同一个函数既能画最底层背景，
+ * 也能画出「面板背后那块背景」——后者再套一层 blur 就是真实的玻璃。
+ */
+private fun DrawScope.drawBackdropArt(b: Backdrop, w: Float, h: Float) {
+    drawRect(
+        brush = Brush.verticalGradient(listOf(b.bgTop, b.bgBottom), startY = 0f, endY = h),
+        topLeft = Offset.Zero,
+        size = Size(w, h),
+    )
+    val img = b.bitmap
+    if (img != null) {
+        // 等价于 ContentScale.Crop：按「铺满」的比例缩放后居中
+        val scale = max(w / img.width.toFloat(), h / img.height.toFloat())
+        val dw = (img.width * scale).roundToInt()
+        val dh = (img.height * scale).roundToInt()
+        drawImage(
+            image = img,
+            srcOffset = IntOffset.Zero,
+            srcSize = IntSize(img.width, img.height),
+            dstOffset = IntOffset(((w - dw) / 2f).roundToInt(), ((h - dh) / 2f).roundToInt()),
+            dstSize = IntSize(dw, dh),
+        )
+        drawRect(color = Color.Black.copy(alpha = b.dim), topLeft = Offset.Zero, size = Size(w, h))
+    } else {
+        // 默认背景：几团柔光，让玻璃面板背后有颜色层次可透
+        softGlow(b.primary.copy(alpha = 0.32f), w * 0.10f, h * 0.09f, w * 0.44f, w, h)
+        softGlow(Color(0xFF3BC8D8).copy(alpha = 0.26f), w * 0.85f, h * 0.20f, w * 0.38f, w, h)
+        softGlow(Color(0xFFF08BC0).copy(alpha = 0.22f), w * 0.30f, h * 0.33f, w * 0.34f, w, h)
+    }
+}
+
+private fun DrawScope.softGlow(color: Color, cx: Float, cy: Float, radius: Float, w: Float, h: Float) {
+    drawRect(
+        brush = Brush.radialGradient(listOf(color, Color.Transparent), center = Offset(cx, cy), radius = radius),
+        topLeft = Offset.Zero,
+        size = Size(w, h),
+    )
+}
 
 @Composable
-fun BackgroundLayer(bgUri: String, dim: Float) {
-    val palette = LocalPalette.current
-    val context = LocalContext.current
-    // 解码放到 IO 线程，避免切页时卡一下
-    val bitmap by produceState<ImageBitmap?>(initialValue = null, bgUri) {
-        value = if (bgUri.isBlank()) null else withContext(Dispatchers.IO) { decodeImage(context, bgUri) }
-    }
-    Box(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(palette.bgTop, palette.bgBottom))))
-        val image = bitmap
-        if (image != null) {
-            Image(
-                bitmap = image,
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize().blur(26.dp),
-                contentScale = ContentScale.Crop,
-            )
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = dim)))
-        } else {
-            // 默认背景：几团柔光，让玻璃面板背后有颜色层次可透
-            Box(
-                Modifier
-                    .size(320.dp)
-                    .offset(x = (-80).dp, y = 20.dp)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(palette.primary.copy(alpha = 0.32f), Color.Transparent),
-                        ),
-                    ),
-            )
-            Box(
-                Modifier
-                    .size(280.dp)
-                    .offset(x = 200.dp, y = 430.dp)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(Color(0xFF3BC8D8).copy(alpha = 0.26f), Color.Transparent),
-                        ),
-                    ),
-            )
-            Box(
-                Modifier
-                    .size(240.dp)
-                    .offset(x = 40.dp, y = 700.dp)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(Color(0xFFF08BC0).copy(alpha = 0.22f), Color.Transparent),
-                        ),
-                    ),
-            )
-        }
-    }
+fun BackgroundLayer(backdrop: Backdrop) {
+    val root = LocalRootSize.current
+    Spacer(
+        Modifier
+            .fillMaxSize()
+            .drawBehind {
+                val w = if (root.width > 0) root.width.toFloat() else size.width
+                val h = if (root.height > 0) root.height.toFloat() else size.height
+                drawBackdropArt(backdrop, w, h)
+            },
+    )
 }
 
 private fun decodeImage(context: Context, uriStr: String): ImageBitmap? = try {
@@ -216,9 +257,85 @@ private fun decodeImage(context: Context, uriStr: String): ImageBitmap? = try {
     null
 }
 
+@Composable
+private fun decodeBackdrop(uriStr: String): ImageBitmap? {
+    val context = LocalContext.current
+    // 解码放到 IO 线程，避免切页时卡一下
+    val bitmap by produceState<ImageBitmap?>(initialValue = null, uriStr) {
+        value = if (uriStr.isBlank()) null else withContext(Dispatchers.IO) { decodeImage(context, uriStr) }
+    }
+    return bitmap
+}
+
 // ================= 玻璃组件 =================
 
-/** 玻璃卡片：半透明底 + 顶部高光 + 亮边。 */
+/**
+ * 真·液态玻璃。
+ *
+ * 面板内容分四层，从下往上：
+ *   ① 被模糊的真实背景 —— 把整屏背景按 -面板位置 平移进来，裁剪成面板形状，再 blur
+ *   ② 玻璃染色（半透明白/黑 + 顶部高光）
+ *   ③ 面板内容
+ *   ④ 1px 亮边
+ *
+ * 关键点：模糊层的尺寸只有**面板那么大**（不是整屏），所以代价和面板面积成正比。
+ * 默认渐变背景没有细节可模糊，这时直接跳过 ①（省一次离屏渲染）。
+ */
+@Composable
+fun GlassSurface(
+    shape: Shape,
+    glassAlpha: Float,
+    modifier: Modifier = Modifier,
+    borderColor: Color? = null,
+    tintTop: Float? = null,
+    tintBottom: Float? = null,
+    onClick: (() -> Unit)? = null,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val palette = LocalPalette.current
+    val backdrop = LocalBackdrop.current
+    val root = LocalRootSize.current
+    var pos by remember { mutableStateOf(Offset.Zero) }
+    val top = tintTop ?: (palette.glassTopAlpha * glassAlpha)
+    val bottom = tintBottom ?: (palette.glassBottomAlpha * glassAlpha)
+    val hasBackdrop = backdrop.bitmap != null && root.width > 0 && root.height > 0 && backdrop.blur > 0.dp
+
+    Box(
+        modifier
+            .onGloballyPositioned { pos = it.positionInRoot() }
+            .clip(shape)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+    ) {
+        if (hasBackdrop) {
+            Spacer(
+                Modifier
+                    .matchParentSize()
+                    .blur(backdrop.blur)
+                    .clipToBounds()
+                    .drawBehind {
+                        withTransform({ translate(-pos.x, -pos.y) }) {
+                            drawBackdropArt(backdrop, root.width.toFloat(), root.height.toFloat())
+                        }
+                    },
+            )
+        }
+        Spacer(
+            Modifier.matchParentSize().background(
+                Brush.verticalGradient(listOf(palette.glass.copy(alpha = top), palette.glass.copy(alpha = bottom))),
+            ),
+        )
+        content()
+        Spacer(
+            Modifier.matchParentSize().border(
+                1.dp,
+                borderColor ?: palette.glassBorder.copy(alpha = 0.55f * glassAlpha),
+                shape,
+            ),
+        )
+    }
+}
+
+/** 玻璃卡片：模糊背景 + 半透明底 + 顶部高光 + 亮边。 */
 @Composable
 fun GlassCard(
     glassAlpha: Float,
@@ -226,28 +343,17 @@ fun GlassCard(
     border: Color? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val palette = LocalPalette.current
-    val shape = RoundedCornerShape(22.dp)
-    Box(
-        modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 5.dp)
-            .clip(shape)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        palette.glass.copy(alpha = palette.glassTopAlpha * glassAlpha),
-                        palette.glass.copy(alpha = palette.glassBottomAlpha * glassAlpha),
-                    ),
-                ),
-            )
-            .border(1.dp, border ?: palette.glassBorder.copy(alpha = 0.55f * glassAlpha), shape),
+    GlassSurface(
+        shape = RoundedCornerShape(22.dp),
+        glassAlpha = glassAlpha,
+        borderColor = border,
+        modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp),
     ) {
         Column(Modifier.padding(16.dp), content = content)
     }
 }
 
-/** 玻璃胶囊（筛选、档位选择都用它）。 */
+/** 玻璃胶囊（筛选、档位选择都用它）。它一般落在卡片里，所以只做染色、不再重复模糊。 */
 @Composable
 fun GlassPill(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val palette = LocalPalette.current
@@ -345,45 +451,65 @@ fun formatTime(ts: Long): String =
 @Composable
 fun App(store: ConfigStore) {
     var tab by remember { mutableIntStateOf(0) }
-    // 只关心「影响外观」的那几个字段：玻璃透明度、背景
+    // 只关心「影响外观」的那几个字段：玻璃透明度/模糊、背景
     var ui by remember { mutableStateOf(store.load()) }
     val health = healthOf(store)
 
     GoutouTheme {
-        var contentAlpha by remember { mutableStateOf(0f) }
-        LaunchedEffect(tab) {
-            contentAlpha = 0f
-            animate(0f, 1f, animationSpec = tween(220)) { value, _ -> contentAlpha = value }
-        }
-        Box(Modifier.fillMaxSize()) {
-            BackgroundLayer(ui.bgUri, ui.bgDim)
-            Column(
+        val palette = LocalPalette.current
+        var rootSize by remember { mutableStateOf(IntSize.Zero) }
+        val backdrop = Backdrop(
+            bitmap = decodeBackdrop(ui.bgUri),
+            dim = ui.bgDim,
+            bgTop = palette.bgTop,
+            bgBottom = palette.bgBottom,
+            primary = palette.primary,
+            blur = ui.glassBlur.dp,
+        )
+
+        CompositionLocalProvider(
+            LocalBackdrop provides backdrop,
+            LocalRootSize provides rootSize,
+        ) {
+            var contentAlpha by remember { mutableStateOf(0f) }
+            LaunchedEffect(tab) {
+                contentAlpha = 0f
+                animate(0f, 1f, animationSpec = tween(220)) { value, _ -> contentAlpha = value }
+            }
+            Box(
                 Modifier
                     .fillMaxSize()
-                    .statusBarsPadding()
-                    .graphicsLayer {
-                        alpha = contentAlpha
-                        translationY = (1f - contentAlpha) * 36f
-                    },
+                    .onGloballyPositioned { rootSize = it.size },
             ) {
-                when (tab) {
-                    0 -> StatusScreen(store) { tab = 1 }
-                    1 -> TrialScreen(store, ui.glassAlpha)
-                    2 -> MentorScreen(store, ui.glassAlpha) { ui = store.load() }
-                    else -> SettingsScreen(
-                        store = store,
-                        ui = ui,
-                        onUi = { ui = it },
-                        onSaved = { ui = store.load() },
-                    )
+                BackgroundLayer(backdrop)
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .graphicsLayer {
+                            alpha = contentAlpha
+                            translationY = (1f - contentAlpha) * 36f
+                        },
+                ) {
+                    when (tab) {
+                        0 -> StatusScreen(store) { tab = 1 }
+                        1 -> TrialScreen(store, ui.glassAlpha)
+                        2 -> MentorScreen(store, ui.glassAlpha) { ui = store.load() }
+                        else -> SettingsScreen(
+                            store = store,
+                            ui = ui,
+                            onUi = { ui = it },
+                            onSaved = { ui = store.load() },
+                        )
+                    }
                 }
+                NavBar(
+                    tab = tab,
+                    health = health,
+                    glassAlpha = ui.glassAlpha,
+                    modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(14.dp),
+                ) { tab = it }
             }
-            NavBar(
-                tab = tab,
-                health = health,
-                glassAlpha = ui.glassAlpha,
-                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(14.dp),
-            ) { tab = it }
         }
     }
 }
@@ -397,25 +523,16 @@ private fun NavBar(
     onTab: (Int) -> Unit,
 ) {
     val palette = LocalPalette.current
-    val shape = RoundedCornerShape(28.dp)
     val items = listOf(
         "运行状态" to Icons.Filled.Pets,
         "试一试" to Icons.Filled.PlayArrow,
         "军师" to Icons.Filled.Edit,
         "设置" to Icons.Filled.Settings,
     )
-    Box(
-        modifier
-            .clip(shape)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        palette.glass.copy(alpha = palette.glassTopAlpha * glassAlpha),
-                        palette.glass.copy(alpha = palette.glassBottomAlpha * glassAlpha),
-                    ),
-                ),
-            )
-            .border(1.dp, palette.glassBorder.copy(alpha = 0.55f * glassAlpha), shape),
+    GlassSurface(
+        shape = RoundedCornerShape(28.dp),
+        glassAlpha = glassAlpha,
+        modifier = modifier,
     ) {
         Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             items.forEachIndexed { index, (label, icon) ->

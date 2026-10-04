@@ -4,6 +4,14 @@
 
 这是对 v0.1 的重写版（原版源码以 `bundle*.txt` 形式存放，本版改成正常源码树）。改了什么、为什么改，见 **[IMPROVEMENTS.md](IMPROVEMENTS.md)**。
 
+## 环境要求
+
+- **Android 12 及以上（API 31+）** —— `minSdk = 31`。
+  液态玻璃面板背后那层**真实背景模糊**用的是 `Modifier.blur`（底层是 `RenderEffect`），这个能力从 Android 12 才提供。
+  因此不再为低版本保留「不模糊」的降级分支，Android 12 以下直接装不上。
+- LSPosed（或其它支持传统 Xposed API 的框架）。本模块仍使用传统 Xposed API：`de.robv.android.xposed:api:82` + `xposedminversion=93`。
+- 微信 **8.0.78** 上验证通过。
+
 ## 构建
 
 ```bash
@@ -43,7 +51,9 @@ app/src/main/java/dev/goutou/wingman/
 │   ├── ViewReader.kt       ★ 唯一依赖 Android 的部分：View 树 → 快照
 │   ├── Overlay.kt          悬浮卡片 + 生命周期
 │   └── WeChatHook.kt       Xposed 入口
-└── ui/                     Compose 界面（含深色模式）
+└── ui/
+    ├── Ui.kt               主题 / 背景层 / 液态玻璃组件（GlassSurface 里是真实背景模糊）
+    └── Screens.kt          四个页面
 app/src/test/java/…         纯逻辑层单元测试（22 个用例）
 tools/pack-bundle.py        可选：把源码树重新打包成 v0.1 那种 bundle 格式
 ```
@@ -82,3 +92,5 @@ Activity.onResume ──► Panel（每个 Activity 一个）
 - 依赖微信当前的消息列表控件类型（`AbsListView` / `RecyclerView`），改了就得跟着改。
 - API Key 明文存放在本应用私有目录（原因见「设置」页说明），别把 `cfg.xml` 到处备份。
 - 本模块只读消息、只填输入框、不自动发送；但仍属于修改微信客户端行为，有风控风险，建议先用小号。
+- 玻璃面板背后的模糊是**面板级**的：每块玻璃只对「自己那一块」的背景做一次离屏模糊，代价和面板面积成正比。
+  默认渐变背景没有细节可模糊，这时会自动跳过，省一次离屏渲染；配了自定义背景图才看得出效果。

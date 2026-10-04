@@ -76,13 +76,14 @@ private fun CheckRow(check: Check, glassAlpha: Float) {
         Level.WARN -> palette.warn
         Level.BAD -> palette.bad
     }
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(palette.glass.copy(alpha = 0.26f * glassAlpha))
-            .clickable(enabled = check.onClick != null) { check.onClick?.invoke() },
+    // 状态行是顶层元素（直接躺在 LazyColumn 上），所以用玻璃面板：背后是真实的背景模糊
+    GlassSurface(
+        shape = RoundedCornerShape(16.dp),
+        glassAlpha = glassAlpha,
+        tintTop = 0.26f * glassAlpha,
+        tintBottom = 0.18f * glassAlpha,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+        onClick = check.onClick,
     ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(10.dp).clip(CircleShape).background(color))
@@ -603,6 +604,13 @@ fun SettingsScreen(
             Text("玻璃不透明度：${(d.glassAlpha * 100).toInt()}%", fontSize = 12.sp, color = palette.sub)
             Slider(value = d.glassAlpha, onValueChange = { update(d.copy(glassAlpha = it)) }, valueRange = 0.3f..1f)
             Spacer(Modifier.height(4.dp))
+            Text(
+                "玻璃背景模糊：${d.glassBlur.toInt()}dp（面板背后是真·背景模糊，配了自定义背景图才看得出来）",
+                fontSize = 12.sp,
+                color = palette.sub,
+            )
+            Slider(value = d.glassBlur, onValueChange = { update(d.copy(glassBlur = it)) }, valueRange = 0f..40f)
+            Spacer(Modifier.height(4.dp))
             Text("背景压暗：${(d.bgDim * 100).toInt()}%", fontSize = 12.sp, color = palette.sub)
             Slider(value = d.bgDim, onValueChange = { update(d.copy(bgDim = it)) }, valueRange = 0f..0.8f)
             Spacer(Modifier.height(6.dp))
@@ -621,7 +629,7 @@ fun SettingsScreen(
             }
             if (d.bgUri.isNotBlank()) {
                 Spacer(Modifier.height(4.dp))
-                Text("已设置自定义背景（会自动模糊）；低版本 Android 上模糊不生效，只保留压暗。", fontSize = 11.sp, color = palette.sub)
+                Text("已设置自定义背景：玻璃面板背后会对它做真实的背景模糊（RenderEffect）。", fontSize = 11.sp, color = palette.sub)
             }
         }
 
