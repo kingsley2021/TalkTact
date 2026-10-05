@@ -40,22 +40,24 @@ class ProxyServer(private val context: Context) {
     var running: Boolean = false
         private set
 
-    /** 最近一次转发的结论（设置页显示用，只放在进程内存里）。 */
-    @Volatile
-    var lastResult: String? = null
-        private set
-
     fun start(port: Int) {
         if (running) return
-        val s = ServerSocket(port, 16, InetAddress.getLoopbackAddress())
+        // ⚠️ 必须**显式指定 IPv4 的 127.0.0.1**，不能用 InetAddress.getLoopbackAddress()：
+        // 后者在支持 IPv6 的设备上会返回 ::1，于是服务只监听 IPv6 回环，
+        // 而客户端连的是 127.0.0.1（IPv4）→ 直接「connection refused」。
+        // 症状就是「打开代理后测试连不上、换端口也没用」，非常难查。
+        val s = ServerSocket(port, 16, InetAddress.getByName("127.0.0.1"))
         socket = s
         running = true
+        ProxyState.running = true
+        ProxyState.port = port
+        ProxyState.lastError = null
         acceptThread = Thread {
             while (running) {
                 val client = try {
                     s.accept()
                 } catch (t: Throwable) {
-                    if (running) lastResult = "accept 失败：${t.message}"
+                    if (running) ProxyState.lastError = "accept 失败：${t.message}"
                     break
                 }
                 runCatching { pool.execute { handle(client) } }
@@ -66,6 +68,7 @@ class ProxyServer(private val context: Context) {
 
     fun stop() {
         running = false
+        ProxyState.running = false
         runCatching { socket?.close() }
         socket = null
         runCatching { acceptThread?.interrupt() }
@@ -106,7 +109,7 @@ class ProxyServer(private val context: Context) {
             if (path != ProxyProtocol.PATH_CHAT) return respond(output, 404, errorBody("未知路径：$path"))
             if (method != "POST") return respond(output, 405, errorBody("只接受 POST"))
             if (!ProxyProtocol.isAuthorized(headers["authorization"], cfg.proxyToken)) {
-                lastResult = "拒绝：token 不对（${System.currentTimeMillis() % 100000}）"
+                ProxyState.lastResult = "拒绝：token 不对"
                 return respond(output, 403, errorBody("token 不对"))
             }
             if (cfg.baseUrl.isBlank()) return respond(output, 502, errorBody("App 里还没填接口地址"))
@@ -118,10 +121,10 @@ class ProxyServer(private val context: Context) {
             val started = System.currentTimeMillis()
             val upstream = forward(cfg.baseUrl, cfg.apiKey, body, headers["content-type"])
             val cost = System.currentTimeMillis() - started
-            lastResult = "转发 ${upstream.first} · ${cost}ms"
+            ProxyState.lastResult = "转发 ${upstream.first} · ${cost}ms"
             respond(output, upstream.first, upstream.second)
         } catch (t: Throwable) {
-            lastResult = "转发异常：${t.message}"
+            ProxyState.lastError = "转发异常：${t.message}"
             runCatching { respond(BufferedOutputStream(client.getOutputStream()), 502, errorBody("代理异常：${t.message}")) }
         } finally {
             runCatching { client.close() }

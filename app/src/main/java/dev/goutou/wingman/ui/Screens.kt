@@ -74,6 +74,7 @@ import dev.goutou.wingman.config.Backup
 import dev.goutou.wingman.config.ConfigStore
 import dev.goutou.wingman.config.DiagExport
 import dev.goutou.wingman.proxy.ProxyProtocol
+import dev.goutou.wingman.proxy.ProxyState
 import dev.goutou.wingman.proxy.ProxyService
 import dev.goutou.wingman.config.GLASS_QUALITY_AUTO
 import dev.goutou.wingman.config.GLASS_QUALITY_HIGH
@@ -1276,6 +1277,19 @@ fun AdvancedScreen(
                 )
             }
             if (d.proxyEnabled) {
+                Spacer(Modifier.height(6.dp))
+                // 状态行直接读进程内的 ProxyState：服务到底起没起来、为什么没起来，一眼可见
+                Text(
+                    when {
+                        ProxyState.running ->
+                            "● 服务在跑：127.0.0.1:${ProxyState.port}" +
+                                (ProxyState.lastResult?.let { " · 最近：$it" } ?: " · 还没被请求过")
+                        ProxyState.lastError != null -> "● 服务没起来：${ProxyState.lastError}"
+                        else -> "● 服务没起来（点上面的开关关掉再开一次；若仍不行点「测试代理」看详情）"
+                    },
+                    fontSize = 11.sp,
+                    color = if (ProxyState.running) palette.ok else palette.bad,
+                )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = d.proxyPort.toString(),
@@ -1303,7 +1317,12 @@ fun AdvancedScreen(
                                         code
                                     }.fold(
                                         { code -> if (code == 200) "代理正常（HTTP 200）" else "代理回话：HTTP $code" },
-                                        { err -> "连不上：${err.message} —— 是不是端口被占或服务没起来" },
+                                        { err ->
+                                            "连不上：${err.message}" + (
+                                                ProxyState.lastError?.let { " · 服务端说：$it" }
+                                                    ?: " · 服务没起来（把上面的开关关掉再打开一次）"
+                                                )
+                                        },
                                     )
                                 }
                             }

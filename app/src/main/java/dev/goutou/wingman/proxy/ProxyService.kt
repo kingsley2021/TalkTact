@@ -56,18 +56,32 @@ class ProxyService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            startForeground(NOTIF_ID, buildNotification(0))
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
             stopSelf()
             return START_NOT_STICKY
         }
         val cfg = ConfigStore(this).load()
-        startForeground(NOTIF_ID, buildNotification(cfg.proxyPort))
+
+        // 前台服务只是「别被系统回收」，**代理本身不依赖它** ——
+        // 所以这里的失败只记下来给用户看，绝不 return：起不来通知也要把代理跑起来。
+        runCatching { startForeground(NOTIF_ID, buildNotification(cfg.proxyPort)) }
+            .onFailure { e ->
+                ProxyState.lastError = "前台服务没起来（${e.javaClass.simpleName}：${e.message}）；代理仍在跑，但系统可能随时回收它"
+            }
+
         if (server == null) {
             val s = ProxyServer(this)
             runCatching { s.start(cfg.proxyPort) }
                 .onSuccess { server = s }
-                .onFailure { server = null }
+                .onFailure { e ->
+                    server = null
+                    ProxyState.running = false
+                    ProxyState.lastError = when {
+                        e.message?.contains("in use", ignoreCase = true) == true ->
+                            "端口 ${cfg.proxyPort} 被占用了，换一个再试"
+                        else -> "端口 ${cfg.proxyPort} 起不来：${e.message}"
+                    }
+                }
         }
         return START_STICKY
     }
@@ -75,6 +89,7 @@ class ProxyService : Service() {
     override fun onDestroy() {
         runCatching { server?.stop() }
         server = null
+        ProxyState.running = false
         super.onDestroy()
     }
 
