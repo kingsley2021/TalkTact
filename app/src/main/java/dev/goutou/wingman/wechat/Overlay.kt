@@ -26,6 +26,7 @@ import dev.goutou.wingman.config.RoleMsg
 import dev.goutou.wingman.llm.LlmClient
 import dev.goutou.wingman.llm.LlmException
 import dev.goutou.wingman.llm.Graded
+import dev.goutou.wingman.llm.isReplyTooLong
 import dev.goutou.wingman.llm.REWRITE_PRESETS
 import dev.goutou.wingman.llm.Reply
 import dev.goutou.wingman.llm.Suggestion
@@ -820,7 +821,11 @@ internal class Panel(private val a: Activity) {
         }
         s.replies.forEachIndexed { index, r ->
             val starred = s.best == index
-            val head = if (starred) "★ ${r.style}" else r.style
+            // 偏长的候选标一下：提示词要求 40~45 字，太长的不像人话（只提示，不拦）
+            val head = buildString {
+                append(if (starred) "★ ${r.style}" else r.style)
+                if (isReplyTooLong(r.text)) append(" · 偏长")
+            }
             val row = LinearLayout(a).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL

@@ -70,6 +70,7 @@ import android.os.Build
 import dev.goutou.wingman.config.ConfigData
 import dev.goutou.wingman.config.Backup
 import dev.goutou.wingman.config.ConfigStore
+import dev.goutou.wingman.config.DiagExport
 import dev.goutou.wingman.config.GLASS_QUALITY_AUTO
 import dev.goutou.wingman.config.GLASS_QUALITY_HIGH
 import dev.goutou.wingman.config.GLASS_QUALITY_LOW
@@ -83,6 +84,7 @@ import dev.goutou.wingman.llm.RemoteSkill
 import dev.goutou.wingman.llm.Graded
 import dev.goutou.wingman.llm.REWRITE_PRESETS
 import dev.goutou.wingman.llm.Suggestion
+import dev.goutou.wingman.llm.isReplyTooLong
 import dev.goutou.wingman.wechat.ChatMsg
 import dev.goutou.wingman.wechat.Sensitive
 import kotlinx.coroutines.Dispatchers
@@ -613,6 +615,13 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
                         if (starred && s.why.isNotBlank()) {
                             Text(s.why, fontSize = 12.sp, color = palette.sub)
                         }
+                        if (isReplyTooLong(reply.text)) {
+                            Text(
+                                "${reply.text.length} 字，偏长 —— 微信里发出去不太像人话，可以点下面的「再短点」",
+                                fontSize = 11.sp,
+                                color = palette.warn,
+                            )
+                        }
                         // 只改这一条：走 complete()（一句话进一句话出），另外两条不动
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             REWRITE_PRESETS.forEach { preset ->
@@ -1099,6 +1108,20 @@ fun AdvancedScreen(
         }
     }
 
+    var diagNote by remember { mutableStateOf<String?>(null) }
+    val diagLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip"),
+    ) { uri ->
+        if (uri != null) {
+            diagNote = try {
+                context.contentResolver.openOutputStream(uri)?.use { it.write(buildDiagZip(context, store, d)) }
+                "已导出诊断包 —— 发之前建议先打开看一眼"
+            } catch (t: Throwable) {
+                "导出失败：${t.message}"
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
         ScreenHeader("高级设置", "接口 · 分析 · 备份 · 诊断") {
             HeaderButton("← 返回", onBack)
@@ -1313,6 +1336,23 @@ fun AdvancedScreen(
                 ) { Text("导入配置") }
             }
             backupNote?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, fontSize = 12.sp, color = if (it.startsWith("已")) palette.ok else palette.bad)
+            }
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = { diagLauncher.launch("TalkTact-诊断包.zip") },
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(14.dp),
+            ) { Text("导出诊断包（.zip）") }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "出问题时用它：环境 / 配置（不含 Key）/ 角色条数 / 抓到的界面结构 / 最近一次调用。\n" +
+                    "⚠️ 里面有你和对方的聊天内容，发出去之前先自己看一眼。",
+                fontSize = 11.sp,
+                color = palette.sub,
+            )
+            diagNote?.let {
                 Spacer(Modifier.height(6.dp))
                 Text(it, fontSize = 12.sp, color = if (it.startsWith("已")) palette.ok else palette.bad)
             }
@@ -2018,4 +2058,56 @@ private fun SelfStyleDetail(store: ConfigStore, glassAlpha: Float) {
         // 底部导航是浮在上面的，留出空位免得被它挡住
         item { Spacer(Modifier.height(110.dp)) }
     }
+}
+
+/**
+ * 组装诊断包。
+ *
+ * 刻意**不含 API Key** —— 诊断包是要发给别人的，Key 不该跟着走。
+ * 里面的 04 / 05 会带聊天内容，所以说明文件（00）里明确提醒了「发之前先看一眼」。
+ */
+private fun buildDiagZip(context: Context, store: ConfigStore, cfg: ConfigData): ByteArray {
+    val roles = store.roles()
+    val (calls, tokens) = store.usage()
+    val lowRam = isLowRamDevice(context)
+    val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+        .format(java.util.Date())
+    return DiagExport.zip(
+        linkedMapOf(
+            "00-说明.txt" to DiagExport.readme(appVersion(context)),
+            "01-环境.txt" to buildString {
+                append("App 版本：${appVersion(context)}\n")
+                append("Android：SDK ${Build.VERSION.SDK_INT}（${Build.VERSION.RELEASE}）\n")
+                append("机型：${Build.MANUFACTURER} ${Build.MODEL}\n")
+                append("低内存设备：$lowRam\n")
+                append("玻璃效果：设置=${cfg.glassQuality} → 实际=${decideGlassQuality(cfg.glassQuality, lowRam, Build.VERSION.SDK_INT)}\n")
+                append("导出时间：$stamp\n")
+            },
+            "02-配置.txt" to buildString {
+                append("接口地址：${cfg.baseUrl}\n")
+                append("模型：${cfg.model}\n")
+                append("生成模式：")
+                append(
+                    if (cfg.graded) {
+                        "模型分级（第二套：${cfg.baseUrl2.ifBlank { "复用第一套" }} / ${cfg.model2.ifBlank { "复用" }}）"
+                    } else {
+                        "直通"
+                    },
+                )
+                append("\n参考条数：${cfg.ctx}　最短间隔：${cfg.minIntervalSec}s　temperature：${cfg.temperature}　max_tokens：${cfg.maxTokens}\n")
+                append("严格 JSON 输出：${cfg.jsonMode}　敏感内容检查：${!cfg.allowSensitive}\n")
+                append("当前 skill：${cfg.skillId}　提示词 ${cfg.prompt.length} 字　含 JSON 契约：${cfg.prompt.contains("replies")}\n")
+                append("API Key：已省略（不导出）\n")
+            },
+            "03-角色.txt" to buildString {
+                append("角色数：${roles.size}\n")
+                roles.forEach {
+                    append("· ${it.name}（key=${it.key}）关系=${it.relation.ifBlank { "-" }} 记录=${it.msgs.size} 条\n")
+                }
+            },
+            "04-诊断.txt" to store.diag().ifBlank { "（还没有诊断数据：到「诊断」页点一次「抓取微信界面」）" },
+            "05-最近一次调用.txt" to store.lastCall().ifBlank { "（还没有调用记录）" },
+            "06-用量.txt" to "调用次数：$calls\n累计 token：$tokens\n",
+        ),
+    )
 }

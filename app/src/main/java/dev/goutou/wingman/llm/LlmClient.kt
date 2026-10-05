@@ -67,37 +67,58 @@ class LlmClient(
             append("聊天记录（时间顺序，最后一条是对方刚发的）：\n").append(msgs.asTranscript())
             append("\n\n只输出系统要求的那个 JSON 对象，不要任何解释文字。")
         }
-        val fields = LinkedHashMap<String, JsonValue>()
-        fields["model"] = str(cfg.model)
-        fields["temperature"] = num(cfg.temperature)
-        // 严格 JSON 输出：让服务端保证返回是合法 JSON。
-        // 只加在「生成候选」这条路上 —— 改写和风格提炼走 complete()，它们本来就要纯文本，
-        // 给它们带 json_object 反而会把返回变成 JSON 字符串。
-        if (cfg.jsonMode) fields["response_format"] = obj("type" to str("json_object"))
-        // 0 = 无限制：干脆不传这个参数，交给服务端默认
-        if (cfg.maxTokens > 0) fields["max_tokens"] = num(cfg.maxTokens)
-        fields["messages"] = arr(
-            listOf(
-                obj("role" to str("system"), "content" to str(systemText)),
-                obj("role" to str("user"), "content" to str(userText)),
-            ),
-        )
-        val payload = Json.encode(JsonValue.Obj(fields))
-        try {
-            val root = parseResponse(post(endpoint(cfg.baseUrl), payload))
-            val content = root.at("choices", "0", "message", "content").asStr()
-                ?: throw LlmException("返回里没有 choices[0].message.content", "确认模型名是否可用、该接口是否兼容 OpenAI 格式")
-            trace(systemText, userText, content)
-            val tokens = root.at("usage", "total_tokens").asInt() ?: 0
-            return LlmResult(
-                suggestion = SuggestionParser.parse(content),
-                totalTokens = tokens,
-                millis = System.currentTimeMillis() - start,
-                model = root.at("model").asStr() ?: cfg.model,
+        fun payloadFor(system: String): String {
+            val fields = LinkedHashMap<String, JsonValue>()
+            fields["model"] = str(cfg.model)
+            fields["temperature"] = num(cfg.temperature)
+            // 严格 JSON 输出：让服务端保证返回是合法 JSON。
+            // 只加在「生成候选」这条路上 —— 改写和风格提炼走 complete()，它们本来就要纯文本，
+            // 给它们带 json_object 反而会把返回变成 JSON 字符串。
+            if (cfg.jsonMode) fields["response_format"] = obj("type" to str("json_object"))
+            // 0 = 无限制：干脆不传这个参数，交给服务端默认
+            if (cfg.maxTokens > 0) fields["max_tokens"] = num(cfg.maxTokens)
+            fields["messages"] = arr(
+                listOf(
+                    obj("role" to str("system"), "content" to str(system)),
+                    obj("role" to str("user"), "content" to str(userText)),
+                ),
             )
-        } catch (t: Throwable) {
-            trace(systemText, userText, "（请求失败）${t.message}")
-            throw t
+            return Json.encode(JsonValue.Obj(fields))
+        }
+
+        // 最多两次：第一次正常发；如果**模型没按契约回**（不是合法 JSON / 被截断），
+        // 补一句「严格只输出 JSON」再试一次 —— 比让用户自己去点「重新识别」强。
+        // 注意：网络类错误不在这里重试（post() 已经做过一次），免得把等待时间叠成三倍。
+        var attempt = 0
+        var tokensTotal = 0
+        while (true) {
+            val system = if (attempt == 0) systemText else systemText + "\n\n" + JSON_NUDGE
+            try {
+                val root = parseResponse(post(endpoint(cfg.baseUrl), payloadFor(system)))
+                val content = root.at("choices", "0", "message", "content").asStr()
+                    ?: throw LlmException("返回里没有 choices[0].message.content", "确认模型名是否可用、该接口是否兼容 OpenAI 格式")
+                trace(system, userText, content)
+                tokensTotal += root.at("usage", "total_tokens").asInt() ?: 0
+                val parsed = try {
+                    SuggestionParser.parse(content)
+                } catch (e: LlmException) {
+                    trace(system, userText, "（解析失败，${if (attempt == 0) "补正后重试一次" else "不再重试"}）${e.message}\n---\n$content")
+                    if (attempt == 0 && e.retryable) {
+                        attempt = 1
+                        continue
+                    }
+                    throw e
+                }
+                return LlmResult(
+                    suggestion = parsed,
+                    totalTokens = tokensTotal,
+                    millis = System.currentTimeMillis() - start,
+                    model = root.at("model").asStr() ?: cfg.model,
+                )
+            } catch (t: Throwable) {
+                trace(system, userText, "（请求失败）${t.message}")
+                throw t
+            }
         }
     }
 
@@ -277,6 +298,12 @@ class LlmClient(
         }
     }
 }
+
+/** 模型没按契约回时的补正指令（只在第二次尝试时追加到 system 末尾）。 */
+private const val JSON_NUDGE = """【补正】你上一次的输出不是合法 JSON，或者被截断了。
+
+这次请严格只输出那一个 JSON 对象：不要解释、不要 markdown 代码块、不要在 JSON 前后加任何文字，
+也不要把字段值写太长以免再次被截断。"""
 
 /**
  * 「单条改写」的三个预设：左边是按钮文字，右边那句原样发给模型。

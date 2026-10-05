@@ -198,3 +198,10 @@ fun List<ChatMsg>.asTranscript(): String = joinToString("\n") { m ->
     }
     "$who: ${m.text}"
 }
+
+
+/** 一条候选多长算「偏长」：提示词里要求 40~45 字，超过这个数就值得提醒一句（只提示，不拦）。 */
+const val REPLY_TOO_LONG_CHARS = 60
+
+/** 是否偏长（纯函数，配单测）。 */
+fun isReplyTooLong(text: String): Boolean = text.trim().length > REPLY_TOO_LONG_CHARS
