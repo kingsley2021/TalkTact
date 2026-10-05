@@ -80,7 +80,10 @@ jobs:
             exit 1
           }
           echo "$OUT"
-          GOT=$(printf '%s\n' "$OUT" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr -d ':' | tr 'a-z' 'A-Z')
+          # 标签随使用的签名方案变（只有 v2 时是「V2 Signer: certificate SHA-256 digest:」，
+          # 多方案并存时是「Signer #1 certificate ...」）—— 所以只认冒号后面那一段
+          GOT=$(printf '%s\n' "$OUT" | grep -i 'certificate SHA-256 digest:' | head -1 \
+            | sed 's/.*digest: *//' | tr -d ':' | tr 'a-z' 'A-Z')
           echo "证书 SHA-256（无分隔）：$GOT"
 
           # 发布证书的指纹（公开信息，硬编码在这里当断言用）
