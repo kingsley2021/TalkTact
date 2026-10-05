@@ -37,6 +37,11 @@ CI 用的密钥**不在仓库里** —— 它放在仓库 Secrets（`KEYSTORE_BA
 为什么必须固定签名：GitHub Actions 每次跑在全新 runner 上，默认的 `~/.android/debug.keystore` 每次重建，
 于是每个版本的签名都不同，覆盖安装会直接 `INSTALL_FAILED_UPDATE_INCOMPATIBLE (-7)`。
 
+密钥还有一份**加密备份**放在仓库里：`signing/key.p12.enc`（AES-256-CBC + PBKDF2 600000 次迭代 + salt）。
+CI 的还原顺序是「优先 `KEYSTORE_BASE64`，它为空时才用这个加密包 + 口令解出来」——
+也就是说 **Secrets 万一丢了，钥匙照样能找回来重新出包**。口令不在仓库里（只在 Secrets 与维护者手上），
+细节见 [signing/README.md](signing/README.md)。
+
 > ⚠️ **0.8.8 换过签名密钥。** 2026-10-05 之前的版本（≤0.8.7）用的是另一把 key，
 > 而那把 key **连同口令一起提交在公开仓库里** —— 等于公开私钥，任何人都能签出"能被已安装用户当作更新覆盖安装"的包。
 > 已作废并轮换，新密钥只存在于 CI Secrets。

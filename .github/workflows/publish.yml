@@ -23,15 +23,26 @@ jobs:
       KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
       KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
+      # 加密包（signing/key.p12.enc）的口令；只在 KEYSTORE_BASE64 缺失时才会用到
+      KEYSTORE_PASSPHRASE: ${{ secrets.KEYSTORE_PASSPHRASE }}
     steps:
       - uses: actions/checkout@v4
       - name: restore signing keystore
-        if: env.KEYSTORE_BASE64 != ''
+        if: env.KEYSTORE_BASE64 != '' || env.KEYSTORE_PASSPHRASE != ''
         run: |
           set -e
           mkdir -p keystore
-          printf '%s' "$KEYSTORE_BASE64" | base64 -d > keystore/talktact.p12
-          echo "keystore 已从 Secrets 还原（$(wc -c < keystore/talktact.p12) 字节）"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > keystore/talktact.p12
+            echo "keystore 已从 Secrets 还原（KEYSTORE_BASE64）"
+          else
+            # 备用路径：仓库里的加密包 + 口令。KEYSTORE_BASE64 万一丢了，靠它照样能出包。
+            # 口令只在 Secrets / 维护者手里，仓库里那份密文没有口令就是一堆无意义的字节。
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+              -in signing/key.p12.enc -out keystore/talktact.p12 -pass env:KEYSTORE_PASSPHRASE
+            echo "keystore 已从仓库加密包还原（signing/key.p12.enc）"
+          fi
+          ls -l keystore/talktact.p12
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
       # libxposed api/service 102 的 AAR 声明了 minCompileSdk=37，runner 上要有平台 37。
@@ -88,7 +99,7 @@ jobs:
 
           # 发布证书的指纹（公开信息，硬编码在这里当断言用）
           EXPECTED=F8D1C2B43AE5EBD3169493937A7DF7AD2C23C59197E29E999E7FCBA626807AD5
-          if [ -n "$KEYSTORE_BASE64" ] && [ "$GOT" != "$EXPECTED" ]; then
+          if { [ -n "$KEYSTORE_BASE64" ] || [ -n "$KEYSTORE_PASSPHRASE" ]; } && [ "$GOT" != "$EXPECTED" ]; then
             echo "::error::签出来的不是发布证书（是不是退回了默认 debug 签名？）"
             exit 1
           fi
