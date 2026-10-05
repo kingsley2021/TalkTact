@@ -53,7 +53,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.goutou.wingman.ModuleStatus
 import dev.goutou.wingman.config.ConfigData
 import dev.goutou.wingman.config.Backup
 import dev.goutou.wingman.config.ConfigStore
@@ -122,14 +121,14 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
     var diagAsked by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val glass = cfg.glassAlpha
-    val active = ModuleStatus.isActive()
+    val active = moduleActive(store)
     val fresh = beat > 0 && System.currentTimeMillis() - beat < 6 * 3600_000L
     val confirmed = store.scopeConfirmed()
 
     val checks = listOf(
         Check(
             "模块激活",
-            if (active) "LSPosed 已加载本模块" else "未激活：在 LSPosed 里启用模块后重启本应用",
+            moduleActiveReason(store) ?: "未激活：在框架里启用本模块并勾选微信，然后强杀微信重开",
             if (active) Level.OK else Level.BAD,
         ),
         Check(
