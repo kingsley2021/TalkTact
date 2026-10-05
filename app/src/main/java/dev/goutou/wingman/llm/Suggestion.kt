@@ -31,7 +31,13 @@ class LlmException(
 
 object SuggestionParser {
 
-    fun parse(raw: String): Suggestion {
+    /**
+     * @param requireReplies 要不要强制要求候选回复。
+     *   默认 true（直通模式那一路必须有候选）。
+     *   **分级模式的「风险评估」那一路契约里根本没有 replies** —— 再按「必须有候选」判，
+     *   就会把一次完全正确的调用报成「模型没给出可用回复」，整条风险路都被判失败（真踩过）。
+     */
+    fun parse(raw: String, requireReplies: Boolean = true): Suggestion {
         // 先按正常路径抠 JSON；抠不出来再试「截断抢救」——被 max_tokens 截断时 JSON 是残缺的，
         // 但里面已经说完的那几条回复还有救，总比整条报错强。
         val strictRoot = extractJson(raw)?.let { Json.parse(it)?.asObj() }
@@ -63,7 +69,7 @@ object SuggestionParser {
                 )
             }
             .filter { it.text.isNotEmpty() }
-        if (replies.isEmpty()) {
+        if (replies.isEmpty() && requireReplies) {
             val cut = strictRoot == null
             throw LlmException(
                 if (cut) "模型输出被截断了，没剩一条完整回复" else "模型没给出可用回复",

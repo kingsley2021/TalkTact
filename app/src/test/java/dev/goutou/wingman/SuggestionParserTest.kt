@@ -132,4 +132,24 @@ class SuggestionParserTest {
         assertEquals("好的", s.replies[0].text)
         assertTrue(s.partial)
     }
+
+    // ---------------- 分级模式：风险那一路没有 replies（回归）----------------
+
+    @Test
+    fun `风险契约的返回不带 replies 也必须解析成功`() {
+        val raw = """{"intent":"在试探你","risk":"中","note":"先别答应时间"}"""
+        // 默认要求候选：这一路按老逻辑会被判失败（就是那个 bug）
+        try {
+            SuggestionParser.parse(raw)
+            fail("默认应当要求候选回复")
+        } catch (e: LlmException) {
+            assertTrue(e.message!!.contains("可用回复"))
+        }
+        // 风险那一路：不要求候选，解析成功且只带回 intent/risk/note
+        val s = SuggestionParser.parse(raw, requireReplies = false)
+        assertEquals("在试探你", s.intent)
+        assertEquals("中", s.risk)
+        assertEquals("先别答应时间", s.note)
+        assertTrue(s.replies.isEmpty())
+    }
 }

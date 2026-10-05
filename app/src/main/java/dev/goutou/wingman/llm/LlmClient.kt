@@ -81,7 +81,13 @@ class LlmClient(
      * 抽出来的原因：分级模式下两路各带自己的提示词（风险评估 / 写回复），
      * [analyze] 就是「用当前 skill 那一份」的快捷方式。
      */
-    fun analyzeWith(systemText: String, msgs: List<ChatMsg>, roleContext: String? = null): LlmResult {
+    fun analyzeWith(
+        systemText: String,
+        msgs: List<ChatMsg>,
+        roleContext: String? = null,
+        /** 见 [SuggestionParser.parse]：分级模式的「风险评估」那一路要传 false */
+        requireReplies: Boolean = true,
+    ): LlmResult {
         requireReady()
         if (msgs.isEmpty()) throw LlmException("没读到聊天内容", null)
 
@@ -129,7 +135,7 @@ class LlmClient(
                 trace(system, userText, content)
                 tokensTotal += root.at("usage", "total_tokens").asInt() ?: 0
                 val parsed = try {
-                    SuggestionParser.parse(content)
+                    SuggestionParser.parse(content, requireReplies)
                 } catch (e: LlmException) {
                     trace(system, userText, "（解析失败，${if (attempt == 0) "补正后重试一次" else "不再重试"}）${e.message}\n---\n$content")
                     if (attempt == 0 && e.retryable) {
