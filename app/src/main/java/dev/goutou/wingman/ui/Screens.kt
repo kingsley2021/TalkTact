@@ -86,6 +86,23 @@ private enum class Level(val label: String) { OK("通过"), WARN("待确认"), B
 
 private data class Check(val title: String, val desc: String, val level: Level, val onClick: (() -> Unit)? = null)
 
+/**
+ * 页面顶栏上的小按钮（返回 / 刷新）。
+ *
+ * 以前这两个动作是纯文字（TextButton），看着像标题的一部分、点起来也没有「按钮」的反馈；
+ * 现在统一给它们一个描边框 —— 一眼能看出是能点的东西。
+ */
+@Composable
+private fun HeaderButton(text: String, onClick: () -> Unit) {
+    val palette = LocalPalette.current
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.height(36.dp),
+        shape = RoundedCornerShape(12.dp),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+    ) { Text(text, fontSize = 13.sp, color = palette.primary) }
+}
+
 @Composable
 private fun CheckRow(check: Check, glassAlpha: Float) {
     val palette = LocalPalette.current
@@ -230,7 +247,7 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
     LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
         item {
             ScreenHeader("运行状态", "WeChat · 聊天副驾 ${appVersion(context)}") {
-                TextButton(onClick = { tick++ }) { Text("刷新") }
+                HeaderButton("↻ 刷新") { tick++ }
                 Button(
                     onClick = onTrial,
                     shape = RoundedCornerShape(16.dp),
@@ -648,20 +665,23 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
 
 // ================= 设置 =================
 
+/**
+ * 设置首页。
+ *
+ * 只留日常会动的东西：外观（玻璃 / 背景）和关于。「接口地址 / 微信内自动分析 / 备份迁移 /
+ * 诊断」这些配一次就不常动的，全收进「高级设置」二级页 —— 原来它们铺在这里，把外观挤到了下面。
+ */
 @Composable
 fun SettingsScreen(
     store: ConfigStore,
     ui: ConfigData,
     onUi: (ConfigData) -> Unit,
-    onSaved: () -> Unit,
-    onOpenDiag: () -> Unit,
+    onOpenAdvanced: () -> Unit,
 ) {
     val palette = LocalPalette.current
     val context = LocalContext.current
     var d by remember { mutableStateOf(ui) }
     var saved by remember { mutableStateOf(false) }
-    var includeKey by remember { mutableStateOf(true) }
-    var backupNote by remember { mutableStateOf<String?>(null) }
 
     fun update(next: ConfigData) {
         d = next
@@ -680,41 +700,8 @@ fun SettingsScreen(
         }
     }
 
-    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        if (uri != null) {
-            backupNote = try {
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    out.write(Backup.export(store.load(), store.roles(), includeKey).toByteArray(Charsets.UTF_8))
-                }
-                "已导出到所选文件"
-            } catch (t: Throwable) {
-                "导出失败：${t.message}"
-            }
-        }
-    }
-
-    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            backupNote = try {
-                val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
-                val result = Backup.import(text, store.load(), store.roles())
-                if (result == null) {
-                    "导入失败：不是有效的备份文件"
-                } else {
-                    store.save(result.config)
-                    store.saveRoles(result.roles)
-                    d = store.load()
-                    onSaved()
-                    "已导入：配置 + ${result.roleCount} 个角色"
-                }
-            } catch (t: Throwable) {
-                "导入失败：${t.message}"
-            }
-        }
-    }
-
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
-        ScreenHeader("设置", "接口 · 外观 · 节奏")
+        ScreenHeader("设置", "外观 · 高级设置 · 关于")
 
         GlassCard(d.glassAlpha) {
             Text("外观", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
@@ -755,9 +742,124 @@ fun SettingsScreen(
                 fontSize = 11.sp,
                 color = palette.sub,
             )
+            Spacer(Modifier.height(14.dp))
+            // 外观现在自己带一个保存按钮：接口那套已经搬进「高级设置」，别再共用一个「保存」了
+            Button(
+                onClick = {
+                    store.save(d)
+                    d = store.load()
+                    saved = true
+                    onUi(d)
+                },
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+            ) { Text(if (saved) "已保存" else "保存外观") }
         }
 
         GlassCard(d.glassAlpha) {
+            Text("高级设置", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text(
+                "接口地址 / API Key / 模型、微信内自动分析（参考条数 · 最短间隔 · temperature · 敏感内容检查）、\n" +
+                    "备份 / 迁移、诊断 —— 都在这一层里面。",
+                fontSize = 12.sp,
+                color = palette.sub,
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onOpenAdvanced,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+            ) { Text("高级设置") }
+        }
+
+        GlassCard(d.glassAlpha) {
+            Text("关于", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = palette.text)
+            Spacer(Modifier.height(6.dp))
+            Text("版本：${appVersion(context)}", fontSize = 12.sp, color = palette.text)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "· 开启后，聊天页最近几条消息会发送到你填写的接口地址，请自行确认该服务可信。\n" +
+                    "· API Key 以明文存放在本应用私有目录（不能加密：注入微信进程的代码需要跨进程读取，Keystore 密钥按 UID 隔离读不到）。\n" +
+                    "· 只读消息、只把候选回复填进输入框，不会自动发送；但仍属于修改微信客户端行为，有风控风险，建议先用小号。\n" +
+                    "· 日志关键字：[Goutou]。",
+                fontSize = 12.sp,
+                color = palette.sub,
+            )
+        }
+    }
+}
+
+// ================= 高级设置（设置 → 二级页） =================
+
+/**
+ * 设置 → 高级设置。
+ *
+ * 从设置首页搬过来的四块：接口地址、微信内自动分析（含敏感检查）、备份 / 迁移、诊断入口。
+ * 它们的共同点是「配一次就不常动」，所以单独一层；诊断再往里一层（三级）。
+ */
+@Composable
+fun AdvancedScreen(
+    store: ConfigStore,
+    ui: ConfigData,
+    onSaved: () -> Unit,
+    onOpenDiag: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val palette = LocalPalette.current
+    val context = LocalContext.current
+    var d by remember { mutableStateOf(ui) }
+    var saved by remember { mutableStateOf(false) }
+    var includeKey by remember { mutableStateOf(true) }
+    var backupNote by remember { mutableStateOf<String?>(null) }
+
+    fun update(next: ConfigData) {
+        d = next
+        saved = false
+    }
+
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) {
+            backupNote = try {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(Backup.export(store.load(), store.roles(), includeKey).toByteArray(Charsets.UTF_8))
+                }
+                "已导出到所选文件"
+            } catch (t: Throwable) {
+                "导出失败：${t.message}"
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            backupNote = try {
+                val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                val result = Backup.import(text, store.load(), store.roles())
+                if (result == null) {
+                    "导入失败：不是有效的备份文件"
+                } else {
+                    store.save(result.config)
+                    store.saveRoles(result.roles)
+                    d = store.load()
+                    onSaved()
+                    "已导入：配置 + ${result.roleCount} 个角色"
+                }
+            } catch (t: Throwable) {
+                "导入失败：${t.message}"
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
+        ScreenHeader("高级设置", "接口 · 分析 · 备份 · 诊断") {
+            HeaderButton("← 返回", onBack)
+        }
+
+        GlassCard(d.glassAlpha) {
+            Text("接口地址", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = d.baseUrl,
                 onValueChange = { update(d.copy(baseUrl = it)) },
@@ -910,32 +1012,17 @@ fun SettingsScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
             ) { Text("进入诊断") }
         }
-
-        GlassCard(d.glassAlpha) {
-            Text("关于", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = palette.text)
-            Spacer(Modifier.height(6.dp))
-            Text("版本：${appVersion(context)}", fontSize = 12.sp, color = palette.text)
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "· 开启后，聊天页最近几条消息会发送到你填写的接口地址，请自行确认该服务可信。\n" +
-                    "· API Key 以明文存放在本应用私有目录（不能加密：注入微信进程的代码需要跨进程读取，Keystore 密钥按 UID 隔离读不到）。\n" +
-                    "· 只读消息、只把候选回复填进输入框，不会自动发送；但仍属于修改微信客户端行为，有风控风险，建议先用小号。\n" +
-                    "· 日志关键字：[Goutou]。",
-                fontSize = 12.sp,
-                color = palette.sub,
-            )
-        }
     }
 }
 
-// ================= 诊断（设置 → 二级页） =================
+// ================= 诊断（设置 → 高级设置 → 诊断） =================
 
 /**
- * 设置 → 诊断。
+ * 设置 → 高级设置 → 诊断（第三层）。
  *
  * 这三块原来是挤在「运行状态」页上的（抓取界面 / 微信进程的诊断 / 最后一次调用），
- * 把那一页撑得很长，而且它们都是「出问题了才看」的东西，所以搬进这个二级页。
- * 运行状态页留下的，是「一眼看健康」的那部分。
+ * 把那一页撑得很长，而且它们都是「出问题了才看」的东西，所以搬进设置这条线里。
+ * 「返回」回高级设置 —— 它就是从那儿进来的。
  */
 @Composable
 fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
@@ -950,8 +1037,9 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
         ScreenHeader("诊断", "抓界面 · 看调用 · 复制发我") {
-            TextButton(onClick = { tick++ }) { Text("刷新") }
-            TextButton(onClick = onBack) { Text("返回") }
+            HeaderButton("↻ 刷新") { tick++ }
+            Spacer(Modifier.width(8.dp))
+            HeaderButton("← 返回", onBack)
         }
 
         GlassCard(glassAlpha) {
@@ -1064,7 +1152,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
         ScreenHeader("角色", "每个人一份档案，直接影响生成") {
-            TextButton(onClick = { tick++ }) { Text("刷新") }
+            HeaderButton("↻ 刷新") { tick++ }
         }
 
         GlassCard(glassAlpha) {
@@ -1201,7 +1289,8 @@ private fun RoleDetail(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
         ScreenHeader(role.name, "档案 · ${role.msgs.size} 条记录") {
             TextButton(onClick = { renameOpen = true }) { Text("改名字") }
-            TextButton(onClick = onBack) { Text("返回") }
+            Spacer(Modifier.width(8.dp))
+            HeaderButton("← 返回", onBack)
         }
 
         GlassCard(glassAlpha) {

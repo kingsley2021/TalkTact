@@ -713,8 +713,8 @@ fun App(store: ConfigStore) {
     var tab by remember { mutableIntStateOf(0) }
     // 「角色」的二级页（打开了某个人）也放在这一层：切走 tab 再回来时能回到原位
     var roleOpen by remember { mutableStateOf<String?>(null) }
-    // 「设置 → 诊断」的二级页，同理
-    var diagOpen by remember { mutableStateOf(false) }
+    // 「设置」这条线上现在有三层：设置(0) → 高级设置(1) → 诊断(2)
+    var settingsPage by remember { mutableIntStateOf(0) }
     // 只关心「影响外观」的那几个字段：玻璃透明度/模糊、背景
     var ui by remember { mutableStateOf(store.load()) }
     val health = healthOf(store)
@@ -762,15 +762,21 @@ fun App(store: ConfigStore) {
                         1 -> TrialScreen(store, ui.glassAlpha)
                         2 -> MentorScreen(store, ui.glassAlpha) { ui = store.load() }
                         3 -> RolesScreen(store, ui.glassAlpha, roleOpen) { roleOpen = it }
-                        else -> if (diagOpen) {
-                            DiagScreen(store, ui.glassAlpha) { diagOpen = false }
-                        } else {
-                            SettingsScreen(
+                        else -> when (settingsPage) {
+                            1 -> AdvancedScreen(
+                                store = store,
+                                ui = ui,
+                                onSaved = { ui = store.load() },
+                                onOpenDiag = { settingsPage = 2 },
+                                onBack = { settingsPage = 0 },
+                            )
+                            // 诊断从「高级设置」里进，所以返回也应该回到高级设置
+                            2 -> DiagScreen(store, ui.glassAlpha) { settingsPage = 1 }
+                            else -> SettingsScreen(
                                 store = store,
                                 ui = ui,
                                 onUi = { ui = it },
-                                onSaved = { ui = store.load() },
-                                onOpenDiag = { diagOpen = true },
+                                onOpenAdvanced = { settingsPage = 1 },
                             )
                         }
                     }
@@ -784,7 +790,7 @@ fun App(store: ConfigStore) {
                     // 离开这一栏就把二级页收掉：切走再回来应该回到列表，而不是停在上次那个二级页；
                     // 点自己这一栏也当成「退出二级页」。
                     if (next != 3 || next == tab) roleOpen = null
-                    if (next != 4 || next == tab) diagOpen = false
+                    if (next != 4 || next == tab) settingsPage = 0
                     tab = next
                 }
             }
