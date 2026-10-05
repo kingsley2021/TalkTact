@@ -35,8 +35,12 @@ data class Role(
 ) {
     val lastAt: Long get() = msgs.lastOrNull()?.at ?: 0L
 
-    /** 用户手动改过名字（列表上标一下，省得自己忘了哪条是改过的）。 */
-    val renamed: Boolean get() = name != key
+    /**
+     * 用户手动改过名字（列表上标一下，省得自己忘了哪条是改过的）。
+     *
+     * 「本人」除外：它的 name（「本人」）和 key（__self__）本来就不一样，不是"改过名"。
+     */
+    val renamed: Boolean get() = name != key && key != SELF_ROLE_KEY
 }
 
 /** 查重窗口：1 小时内内容相同的重复消息只留一条。 */
@@ -47,6 +51,20 @@ const val ROLE_MAX_MSGS = 120
 
 /** 最多保留多少个角色（按最近活跃淘汰）。 */
 const val ROLE_MAX_COUNT = 40
+
+/**
+ * 「本人」这条线的固定 key。
+ *
+ * 用固定常量、而不是用户的微信昵称当 key —— 这就是「以后换名字会开出好多个角色栏」的解药：
+ * 名字只负责显示，标识永远不变。
+ */
+const val SELF_ROLE_KEY = "__self__"
+
+/** 「本人」的显示名。固定值，不给改。 */
+const val SELF_ROLE_NAME = "本人"
+
+/** 「本人」最多留多少条样本。比普通角色多：提炼说话风格需要量。 */
+const val SELF_MAX_MSGS = 400
 
 /**
  * 角色的序列化 / 反序列化 / 合并 / 改名。全是纯函数，不碰 Android，可以直接单测。
@@ -144,11 +162,25 @@ object Roles {
             }
             if (dup) continue
             val merged = (cur.msgs + m).sortedBy { it.at }
-            byKey[key] = cur.copy(
-                msgs = if (merged.size > ROLE_MAX_MSGS) merged.takeLast(ROLE_MAX_MSGS) else merged,
-            )
+            // 「本人」那条要留更多样本（提炼风格靠量），其余保持原来的上限
+            val cap = if (key == SELF_ROLE_KEY) SELF_MAX_MSGS else ROLE_MAX_MSGS
+            byKey[key] = cur.copy(msgs = if (merged.size > cap) merged.takeLast(cap) else merged)
         }
         return byKey.values.sortedByDescending { it.lastAt }.take(ROLE_MAX_COUNT)
+    }
+
+    /**
+     * 保证「本人」那条存在，并且永远排在最前。
+     *
+     * 之所以是「补齐」而不是「初始化」：老用户升上来时列表里没有这条，也得立刻出现；
+     * 而放在这个纯函数里（而不是 App 启动时写一次），新装、清数据、导入备份之后都不需要额外照顾。
+     */
+    fun withSelf(roles: List<Role>): List<Role> {
+        val self = roles.firstOrNull { it.key == SELF_ROLE_KEY }
+        val rest = roles.filterNot { it.key == SELF_ROLE_KEY }
+            .sortedByDescending { it.lastAt }
+            .take(ROLE_MAX_COUNT)
+        return listOf((self ?: Role(SELF_ROLE_KEY)).copy(name = SELF_ROLE_NAME)) + rest
     }
 
     /** 写「TA 是你什么人 / 平时的关系」。 */

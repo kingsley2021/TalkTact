@@ -69,6 +69,31 @@ class LlmClient(
         }
     }
 
+    /**
+     * 通用的一次文本调用（目前只有「把我的说话风格提炼成 skill」用它）。
+     *
+     * 和 [analyze] 的区别：不要求模型返回 JSON，直接把 content 原文给回去。
+     * 复用同一套 endpoint / post / 错误处理，省得两份请求代码各自漂移。
+     */
+    fun complete(systemText: String, userText: String): Pair<String, Int> {
+        if (cfg.apiKey.isBlank()) throw LlmException("还没填 API Key", "到「设置」里填地址和 Key")
+        val fields = LinkedHashMap<String, JsonValue>()
+        fields["model"] = str(cfg.model)
+        // 提炼风格不需要发散：温度压低，免得每次结果跳来跳去
+        fields["temperature"] = num(0.3)
+        if (cfg.maxTokens > 0) fields["max_tokens"] = num(cfg.maxTokens)
+        fields["messages"] = arr(
+            listOf(
+                obj("role" to str("system"), "content" to str(systemText)),
+                obj("role" to str("user"), "content" to str(userText)),
+            ),
+        )
+        val root = parseResponse(post(endpoint(cfg.baseUrl), Json.encode(JsonValue.Obj(fields))))
+        val content = root.at("choices", "0", "message", "content").asStr()
+            ?: throw LlmException("返回里没有 choices[0].message.content", "确认模型名是否可用、该接口是否兼容 OpenAI 格式")
+        return content to (root.at("usage", "total_tokens").asInt() ?: 0)
+    }
+
     /** 把这次实际发出去的 system 提示词 / user 消息 / 模型原始返回交给调用方存档。 */
     private fun trace(systemText: String, userText: String, response: String) {
         val cb = onTrace ?: return

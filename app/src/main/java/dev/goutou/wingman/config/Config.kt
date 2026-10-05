@@ -51,7 +51,17 @@ object Keys {
     const val BG_DIM = "bg_dim"
     const val SKILL = "skill_id"
     const val MENTOR_ADV = "mentor_adv"
+    /** 「本人」那条的开关：把我的说话风格做成 skill（默认关） */
+    const val SELF_STYLE_ON = "self_style_on"
+    /** 自动提炼出来的说话风格档案 */
+    const val SELF_SKILL = "self_skill"
+    const val SELF_SKILL_AT = "self_skill_at"
+    /** 每天几点跑（0..23，本地时间） */
+    const val SELF_STYLE_HOUR = "self_style_hour"
 }
+
+/** 默认几点跑。 */
+const val DEFAULT_SELF_STYLE_HOUR = 12
 
 data class ConfigData(
     val baseUrl: String = DEFAULT_BASE,
@@ -80,6 +90,18 @@ data class ConfigData(
     val skillId: String = "classic",
     /** 「军师」页停在进阶视图。以前是用 maxTokens==0 猜的，会粘住，改成独立记住 */
     val mentorAdvanced: Boolean = false,
+    /**
+     * 「本人」那条的「把我的说话风格做成 skill」开关。
+     *
+     * 注意这个字段是**只读**的：它由 [ConfigStore.setSelfStyleEnabled] 单独写，
+     * save() 刻意不碰它 —— 免得设置页拿着一份旧快照把这个开关覆盖回去。
+     */
+    val selfStyleEnabled: Boolean = false,
+    /**
+     * 每天几点跑（0..23）。和 [selfStyleEnabled] 一样是**只读**字段：
+     * 由 [ConfigStore.setSelfStyleHour] 单独写，save() 不碰它。
+     */
+    val selfStyleHour: Int = DEFAULT_SELF_STYLE_HOUR,
 ) {
     companion object {
         /** 老版本存过的 max_tokens 不在四档里（比如 500），归一化到最近的档，免得设置页四档都没选中。 */
@@ -108,6 +130,8 @@ data class ConfigData(
             maxTokens = snapTier(p.getInt(Keys.MAX_TOKENS, 400)),
             minIntervalSec = p.getInt(Keys.MIN_INTERVAL, 15).coerceIn(0, 600),
             allowSensitive = p.getBoolean(Keys.SENSITIVE, false),
+            selfStyleEnabled = p.getBoolean(Keys.SELF_STYLE_ON, false),
+            selfStyleHour = p.getInt(Keys.SELF_STYLE_HOUR, DEFAULT_SELF_STYLE_HOUR).coerceIn(0, 23),
         )
     }
 }
@@ -188,7 +212,46 @@ class ConfigStore(context: Context) {
      */
     // ---------------- 角色 ----------------
 
-    fun roles(): List<Role> = Roles.decode(sp.getString(Keys.ROLES, "").orEmpty())
+    /** 角色列表。统一走 [Roles.withSelf]：「本人」那条永远是第一条、永远在。 */
+    fun roles(): List<Role> = Roles.withSelf(Roles.decode(sp.getString(Keys.ROLES, "").orEmpty()))
+
+    // ---------------- 「本人」的说话风格 skill ----------------
+
+    fun selfStyleEnabled(): Boolean = sp.getBoolean(Keys.SELF_STYLE_ON, false)
+
+    /**
+     * 开关。
+     *
+     * 关掉时**连采集到的原始记录一起清掉** —— 这就是「不存储我的聊天记录」的字面意思。
+     * 已生成的 skill 先留着：它只是提炼结果，不重新打开就不会被用上。
+     */
+    fun setSelfStyleEnabled(on: Boolean) {
+        sp.edit().putBoolean(Keys.SELF_STYLE_ON, on).apply()
+        if (!on) clearRoleMsgs(SELF_ROLE_KEY)
+    }
+
+    /** 每天几点跑（本地时间 0..23）。 */
+    fun selfStyleHour(): Int =
+        sp.getInt(Keys.SELF_STYLE_HOUR, DEFAULT_SELF_STYLE_HOUR).coerceIn(0, 23)
+
+    fun setSelfStyleHour(hour: Int) {
+        sp.edit().putInt(Keys.SELF_STYLE_HOUR, hour.coerceIn(0, 23)).apply()
+    }
+
+    fun selfSkill(): String = sp.getString(Keys.SELF_SKILL, "").orEmpty()
+
+    fun selfSkillAt(): Long = sp.getLong(Keys.SELF_SKILL_AT, 0L)
+
+    fun saveSelfSkill(text: String) {
+        sp.edit()
+            .putString(Keys.SELF_SKILL, text)
+            .putLong(Keys.SELF_SKILL_AT, System.currentTimeMillis())
+            .apply()
+    }
+
+    /** 「本人」这条线攒到的样本（都是我自己发出去的话）。 */
+    fun selfSamples(): List<RoleMsg> =
+        roles().firstOrNull { it.key == SELF_ROLE_KEY }?.msgs.orEmpty().filter { it.fromMe }
 
     fun saveRoles(roles: List<Role>) {
         sp.edit().putString(Keys.ROLES, Roles.encode(roles)).apply()
