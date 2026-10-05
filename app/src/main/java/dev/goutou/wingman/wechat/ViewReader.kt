@@ -80,32 +80,65 @@ internal class ViewReader(private val a: Activity) {
     /**
      * 聊天页顶部那个标题 —— 也就是这个会话的名字，「角色」功能就拿它当 key。
      *
-     * 微信没给我们正经接口，只能从界面里找：屏幕最上方、水平居中、有点宽度、不是按钮文案的 TextView。
+     * 微信没给我们正经接口，只能从界面里找。这里踩过的坑，按重要性排：
+     *
+     * 1. **消息列表是从 y=0 铺满整屏的**（穿过工具栏底下），所以列表里的某条消息完全可能落在
+     *    顶部那一带、还恰好居中 —— 之前就是这么把消息当标题的。现在直接排除「在列表内部的节点」。
+     * 2. 标题栏那一带是**相对状态栏**的，不是屏幕高度的固定比例（刘海屏/不同状态栏高度都会偏），
+     *    所以按 rootWindowInsets 算区间。
+     * 3. 标题是**水平居中**的 —— 这一条从「加分项」改成「硬条件」。
+     * 4. 兜底：候选文本如果和当前屏幕上某条消息一模一样，也排除。
+     *
      * 找不到就返回 null，调用方会整页跳过 —— 宁可漏记，也不能把消息记到别人头上。
      */
-    fun findChatTitle(root: View): String? {
+    fun findChatTitle(root: View, list: ViewGroup?, avoidTexts: List<String> = emptyList()): String? {
         val screenW = width
+        val inset = statusBarInset(root)
+        val bandTop = (inset - dp(8)).coerceAtLeast(0)
+        val bandBottom = inset + dp(100)          // 工具栏高度大约这么多
+        val avoid = avoidTexts.map { it.trim() }.filter { it.isNotEmpty() }.toHashSet()
         var best: String? = null
         var bestScore = Int.MIN_VALUE
         walk(root) { v ->
             if (v !is TextView || v is EditText) return@walk
             if (!v.isShown) return@walk
+            if (list != null && inside(list, v)) return@walk     // ← 关键：列表里的都不是标题
             val t = v.text?.toString()?.trim().orEmpty()
-            if (!okText(t) || t.length > 24) return@walk
-            if (v.width < dp(40) || v.height < dp(18)) return@walk
-            if (v.width > screenW * 0.8f) return@walk
+            if (t.isEmpty() || t.length > 24) return@walk
+            if (t in UI_WORDS || looksLikeViewDump(t)) return@walk
+            if (t in avoid) return@walk
+            if (v.width < dp(28) || v.height < dp(16)) return@walk
             val loc = IntArray(2)
             v.getLocationOnScreen(loc)
-            if (loc[1] > height * 0.14f) return@walk      // 只在顶部那一带找
-            // 越靠近屏幕中线越像标题；同样居中时取更宽的
+            if (loc[1] < bandTop || loc[1] > bandBottom) return@walk
             val off = abs((loc[0] + v.width / 2f) - screenW / 2f) / screenW.toFloat()
-            val score = ((1f - off) * 1000).toInt() + v.width / 10
+            if (off > 0.12f) return@walk                          // 标题一定是居中的
+            // 居中是主判据，宽度只用来打平手（标题容器可能拉得很宽，也可能 wrap_content）
+            val score = ((1f - off) * 1000).toInt() + v.width.coerceAtMost(screenW) / 20
             if (score > bestScore) {
                 bestScore = score
                 best = t
             }
         }
         return best
+    }
+
+    /** v 是不是 container 的后代（用来把「消息列表里的文字」和「工具栏标题」分开）。 */
+    private fun inside(container: View, v: View): Boolean {
+        var p: ViewParent? = v.parent
+        var guard = 0
+        while (p is View && guard++ < 64) {
+            if (p === container) return true
+            p = p.parent
+        }
+        return false
+    }
+
+    /** 状态栏高度。标题那一带是相对它算的，不能按屏幕高度取比例。 */
+    private fun statusBarInset(root: View): Int = try {
+        root.rootWindowInsets?.systemWindowInsets?.top ?: dp(24)
+    } catch (t: Throwable) {
+        dp(24)
     }
 
     fun findChatInput(root: View): EditText? {

@@ -369,7 +369,7 @@ internal class Panel(private val a: Activity) {
         emptyNotified = false
 
         // 记进「角色」页（认不出会话名就整页跳过，宁可漏记也不记错人）
-        recordToRoles(decor, msgs, fingerprint)
+        recordToRoles(decor, list, msgs, fingerprint)
 
         // 安全网：一条文字都没读到，说明「读的东西」本身就不对。
         // 这时候去调模型只会浪费 token 并给出荒谬建议，所以先停下、留诊断、明确告诉用户。
@@ -415,10 +415,12 @@ internal class Panel(private val a: Activity) {
      * 本页内先用「方向+文本」去一次重（模块 900ms 就会重读同一屏），App 侧还有
      * 「1 小时内重复只留一条」的兜底。
      */
-    private fun recordToRoles(decor: View, msgs: List<ChatMsg>, fingerprint: String) {
+    private fun recordToRoles(decor: View, list: ViewGroup, msgs: List<ChatMsg>, fingerprint: String) {
         try {
             if (chatNameFor != fingerprint) {
-                chatName = reader.findChatTitle(decor).orEmpty()
+                // 把消息列表和当前消息文本一起传进去：列表里的文字、以及和消息一模一样的文字，
+                // 都不可能是会话名（消息列表是从 y=0 铺满整屏的，会穿过工具栏那一带）
+                chatName = reader.findChatTitle(decor, list, msgs.map { it.text }).orEmpty()
                 chatNameFor = fingerprint
             }
             if (chatName.isBlank()) return
