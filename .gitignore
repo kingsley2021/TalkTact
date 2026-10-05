@@ -5,6 +5,11 @@ app/build/
 local.properties
 *.apk
 *.keystore
+*.p12
+*.jks
+
+# 签名密钥绝不入库（历史里那把已公开作废，见 CHANGELOG 0.8.8）
+keystore/
 .idea/
 captures/
 .cxx/

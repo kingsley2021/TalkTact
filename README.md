@@ -1,8 +1,8 @@
 # TalkTact · 微信聊天助手（Xposed 模块）
 
-在微信聊天页顶部悬浮一张卡片：读最近几条消息 → 调 LLM → 给 3 条风格不同的候选回复 → **点一下填入输入框**（不会自动发送）。
+在微信聊天页右上角留一个**小按钮**，点开才是候选回复卡片：读最近几条消息 → 调 LLM → 给 3 条风格不同的候选回复 → **点一下填入输入框**（不会自动发送）。默认收起、不挡消息。
 
-当前版本 **v0.7.1**。对 v0.1 的重写说明见 [IMPROVEMENTS.md](IMPROVEMENTS.md)，历次改动见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v0.8.8**。对 v0.1 的重写说明见 [IMPROVEMENTS.md](IMPROVEMENTS.md)，历次改动见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 兼容的框架
 
@@ -30,20 +30,27 @@ v0.7.0 起本模块改用 **libxposed Modern API 102**（`minApiVersion=102`）�
 
 ## 签名
 
-CI 用的是仓库里固定的 `keystore/talktact.p12`（自签、口令 `talktact`）。
+CI 用的密钥**不在仓库里** —— 它放在仓库 Secrets（`KEYSTORE_BASE64` / `KEYSTORE_PASSWORD` / `KEYSTORE_ALIAS`），
+构建前由 workflow 还原成 `keystore/talktact.p12`。想在本地签出同一个包：把该文件放回 `keystore/`
+并设置 `KEYSTORE_PASSWORD` 环境变量；**文件不存在时会退回默认 debug 签名**，不影响本地编译。
 
-原因：GitHub Actions 每次跑在全新 runner 上，默认的 `~/.android/debug.keystore` 每次重建，
+为什么必须固定签名：GitHub Actions 每次跑在全新 runner 上，默认的 `~/.android/debug.keystore` 每次重建，
 于是每个版本的签名都不同，覆盖安装会直接 `INSTALL_FAILED_UPDATE_INCOMPATIBLE (-7)`。
-把钥匙固定下来，本地和 CI 签出来才是同一份。
 
-⚠️ 这把 key 是公开的，只用来保证「同一个应用能连续升级」，**不构成任何安全边界**。
+> ⚠️ **0.8.8 换过签名密钥。** 2026-10-05 之前的版本（≤0.8.7）用的是另一把 key，
+> 而那把 key **连同口令一起提交在公开仓库里** —— 等于公开私钥，任何人都能签出"能被已安装用户当作更新覆盖安装"的包。
+> 已作废并轮换，新密钥只存在于 CI Secrets。
+>
+> 因此：**从 0.8.7 及更早版本升级到 0.8.8+，必须先卸载旧版再安装** —— 配置会一起删掉，
+> 请先在「设置 → 备份 / 迁移」里导出备份，装完再导入。
+> 也请只从模块库 / 本仓库 Release 下载，Release 页附有 sha256 供校验。
 
 ## 环境要求
 
 - **Android 12 及以上（API 31+）** —— `minSdk = 31`。
   液态玻璃面板背后那层**真实背景模糊**用的是 `Modifier.blur`（底层是 `RenderEffect`），这个能力从 Android 12 才提供。
   因此不再为低版本保留「不模糊」的降级分支，Android 12 以下直接装不上。
-- LSPosed（或其它支持传统 Xposed API 的框架）。本模块仍使用传统 Xposed API：`de.robv.android.xposed:api:82` + `xposedminversion=93`。
+- **需要框架提供 libxposed API 102**：LSPosed / Vector，或免 root 的 NPatch 都可以（见上面的兼容表）。
 - 微信 **8.0.78** 上验证通过。
 
 ## 构建
@@ -61,7 +68,7 @@ gradle :app:assembleDebug       # 产出 app/build/outputs/apk/debug/app-debug.a
 1. 装 APK（包名 `io.github.shibry88_netizen.talktact`）→ LSPosed「模块」里启用「TalkTact」→ **作用域勾选微信** → 强杀微信重开。
 2. 打开本 App：「设置」填接口地址（OpenAI 兼容，写到 `/v1`）、API Key、模型。
 3. 回首页点「接口自检」——真发一次最小请求，确认地址/Key/模型都对。
-4. 到微信里打开一个聊天，顶部会出现候选回复卡片。
+4. 到微信里打开一个聊天，右上角会出现「军师」按钮 —— 点一下展开候选回复卡片。
 
 **改配置不需要重启微信**：模块每次识别前会检查配置文件有没有被改过，改了就地重载。
 只有「作用域」这类 LSPosed 层面的改动才需要强杀微信。

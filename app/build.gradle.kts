@@ -11,33 +11,42 @@ android {
         applicationId = "io.github.shibry88_netizen.talktact"
         minSdk = 31  // Android 12+：液态玻璃的真实背景模糊走 RenderEffect
         targetSdk = 34
-        versionCode = 34
-        versionName = "0.8.7"
+        versionCode = 35
+        versionName = "0.8.8"
     }
     /**
-     * 固定签名。
+     * 发布签名：**密钥不进仓库**。
      *
-     * 为什么需要：GitHub Actions 每次跑在全新 runner 上，默认的 ~/.android/debug.keystore
-     * 是**每次重建**的 —— 于是每个版本的签名都不一样，覆盖安装会直接报
-     * INSTALL_FAILED_UPDATE_INCOMPATIBLE (-7)。把钥匙固定下来（提交在本仓库里），
-     * 本地和 CI 签出来就是同一份，升级才装得上。
+     * 为什么要固定签名：GitHub Actions 每次跑在全新 runner 上，默认的 ~/.android/debug.keystore
+     * 是每次重建的 —— 于是每个版本的签名都不一样，覆盖安装会直接报
+     * INSTALL_FAILED_UPDATE_INCOMPATIBLE (-7)。钥匙固定下来，本地和 CI 签出来的才是同一份。
      *
-     * 注意：这把 key 是公开的，它只用来保证「同一个应用能连续升级」，**不构成任何安全边界**。
+     * 钥匙在哪：只存在于 CI Secrets（KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEYSTORE_ALIAS），
+     * workflow 在构建前把它还原成 keystore/talktact.p12。想在本地签出同样的包，把该文件放回
+     * keystore/ 并设置同名环境变量即可（用 KEYSTORE_PATH 可以指到别处）。
+     * **文件缺失时不启用固定签名**，退回默认 debug 签名 —— 本地/下游构建不会因为缺钥匙而失败。
+     *
+     * ⚠️ 2026-10-05 换过钥匙：旧 key 连同口令曾提交在公开仓库里（commit 4f7b58e），等于公开私钥，已作废。
+     * 签名变了 → 从 0.8.7 及更早版本升级的用户必须**卸载重装**（先在「设置 → 备份 / 迁移」导出备份）。
      */
-    signingConfigs {
-        create("stable") {
-            storeFile = file("../keystore/talktact.p12")
-            storePassword = "talktact"
-            keyAlias = "talktact"
-            keyPassword = "talktact"
+    val keystoreFile = file(System.getenv("KEYSTORE_PATH") ?: "../keystore/talktact.p12")
+    val keystorePassword = System.getenv("KEYSTORE_PASSWORD")
+    val stableSigning = if (keystoreFile.exists() && !keystorePassword.isNullOrBlank()) {
+        signingConfigs.create("stable") {
+            storeFile = keystoreFile
+            storePassword = keystorePassword
+            keyAlias = System.getenv("KEYSTORE_ALIAS") ?: "talktact"
+            keyPassword = keystorePassword
             storeType = "PKCS12"
         }
+    } else {
+        null
     }
     buildTypes {
-        debug { signingConfig = signingConfigs.getByName("stable") }
+        debug { stableSigning?.let { signingConfig = it } }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("stable")
+            stableSigning?.let { signingConfig = it }
         }
     }
     compileOptions {
