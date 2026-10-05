@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  通知栏专用小图标。
+
+  ⚠️ 千万别用 @mipmap/ic_launcher：那在 API 26+ 上解析到的是 mipmap-anydpi-v26/ic_launcher.xml，
+  是个 **adaptive-icon**，而通知小图标不允许用它 —— setSmallIcon 之后 startForeground() 会直接抛
+  「invalid notification (no valid small icon)」，前台服务起不来。
+  症状很迷惑：跟通知权限毫无关系，用户给了权限也照样失败。
+
+  通知小图标会被系统当成**遮罩**用（只取 alpha 通道），所以这里画纯白单色即可，不需要配色。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,3h16c1.1,0 2,0.9 2,2v10c0,1.1 -0.9,2 -2,2h-8l-5,4v-4h-3c-1.1,0 -2,-0.9 -2,-2v-10c0,-1.1 0.9,-2 2,-2z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M8,8h8v1.6h-8zM8,11h5v1.6h-5z" />
+</vector>

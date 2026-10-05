@@ -67,12 +67,15 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import dev.goutou.wingman.config.ConfigData
 import dev.goutou.wingman.config.Backup
 import dev.goutou.wingman.config.ConfigStore
 import dev.goutou.wingman.config.DiagExport
+import androidx.core.content.ContextCompat
 import dev.goutou.wingman.proxy.ProxyProtocol
 import dev.goutou.wingman.proxy.ProxyState
 import dev.goutou.wingman.proxy.ProxyService
@@ -1142,6 +1145,13 @@ fun AdvancedScreen(
     var diagNote by remember { mutableStateOf<String?>(null) }
     var proxyNote by remember { mutableStateOf<String?>(null) }
     val proxyScope = rememberCoroutineScope()
+    // 13+ 才有的通知权限。注意：前台服务**没有**它也照样能跑（系统仍会显示这条常驻通知），
+    // 但既然要弹，就在用户打开开关时顺手要一下 —— 不然以后那条通知可能被折叠/静音。
+    val notifPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        proxyNote = if (granted) "已授予通知权限" else "没给通知权限 —— 代理照跑，但系统更容易把它回收"
+    }
     val diagLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip"),
     ) { uri ->
@@ -1267,6 +1277,12 @@ fun AdvancedScreen(
                         d = store.load()
                         if (on) {
                             store.ensureProxyToken()
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+                                PackageManager.PERMISSION_GRANTED
+                            ) {
+                                notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
                             ProxyService.start(context)
                             proxyNote = "已开启。到微信里试一次识别；如果一直失败，把这里关掉就退回直连。"
                         } else {

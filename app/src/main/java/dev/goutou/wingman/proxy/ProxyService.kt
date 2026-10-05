@@ -66,7 +66,7 @@ class ProxyService : Service() {
         // 所以这里的失败只记下来给用户看，绝不 return：起不来通知也要把代理跑起来。
         runCatching { startForeground(NOTIF_ID, buildNotification(cfg.proxyPort)) }
             .onFailure { e ->
-                ProxyState.lastError = "前台服务没起来（${e.javaClass.simpleName}：${e.message}）；代理仍在跑，但系统可能随时回收它"
+                ProxyState.lastError = "前台服务没起来（${e.javaClass.simpleName}）；代理仍在跑，但系统可能随时回收它"
             }
 
         if (server == null) {
@@ -112,7 +112,8 @@ class ProxyService : Service() {
         return Notification.Builder(this, CHANNEL)
             .setContentTitle("TalkTact 本地代理运行中")
             .setContentText("127.0.0.1:$port · API Key 没有离开本应用")
-            .setSmallIcon(R.mipmap.ic_launcher)
+            // 必须用 drawable 里的单色图标：mipmap 的 ic_launcher 是 adaptive-icon，通知不接受
+            .setSmallIcon(R.drawable.ic_stat_talktact)
             .setContentIntent(open)
             .setOngoing(true)
             .build()
