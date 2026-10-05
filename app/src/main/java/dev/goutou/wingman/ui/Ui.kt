@@ -78,6 +78,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.goutou.wingman.ModuleStatus
 import dev.goutou.wingman.config.ConfigData
+import dev.goutou.wingman.config.RemoteSync
 import dev.goutou.wingman.config.ConfigStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -433,8 +434,31 @@ fun skillName(id: String): String = when (id) {
 }
 
 /** 顶栏那个小圆点/勾叉就靠它：模块激活 + Key + （心跳或手动确认）。 */
+/**
+ * 「模块到底生效了没」的判定，返回能说清缘由的说明；没生效返回 null。
+ *
+ * 为什么要三个信号：现代 API 之后，模块被注入哪些进程**严格跟随作用域勾选**。
+ * legacy 时代框架会无条件把模块也注入它自己的 App 进程（那是 New XSharedPreferences
+ * 机制的一部分），所以老的「自注入探针」一直成立；换成现代 API 后这条不再成立 ——
+ * 用户只勾了微信时探针永远不亮，但模块其实工作得好好的。所以改成
+ * 「任意一个信号成立即算生效」：
+ *
+ * 1. 自注入探针：用户显式把本模块也勾进作用域时成立（scope.list 里已放了本模块的包名）；
+ * 2. service 通道已建立：框架认得本模块、并且正在跟它通信（见 RemoteSync）；
+ * 3. 微信进程报过心跳：最硬的证据 —— 模块真的在微信里跑起来了。
+ */
+fun moduleActiveReason(store: ConfigStore): String? = when {
+    ModuleStatus.isActive() -> "框架已把模块注入本应用"
+    RemoteSync.bound -> "框架已连上本模块（service 通道已建立）"
+    store.heartbeatAt() > 0 -> "微信进程里跑过本模块"
+    else -> null
+}
+
+fun moduleActive(store: ConfigStore): Boolean = moduleActiveReason(store) != null
+
+/** 顶栏那个小圆点/勾叉就靠它：模块激活 + Key + （心跳或手动确认）。 */
 fun healthOf(store: ConfigStore): Health {
-    val active = ModuleStatus.isActive()
+    val active = moduleActive(store)
     val cfg = store.load()
     val heartbeat = store.heartbeatAt()
     val fresh = heartbeat > 0 && System.currentTimeMillis() - heartbeat < 6 * 3600_000L
