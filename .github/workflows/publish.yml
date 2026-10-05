@@ -4,8 +4,9 @@ name: publish
 #
 # 为什么需要 MODULE_REPO_TOKEN：那个组织开了「OAuth 应用访问限制」，
 # 普通第三方 OAuth 应用（含网页端登录用的那种）会被挡在写操作之外，PAT 不受这条限制。
-# 建一个 classic token，scope 只勾 repo，然后在本仓库 Settings → Secrets 里加名为
-# MODULE_REPO_TOKEN 的 secret 即可。
+# 建一个 classic token（不是 fine-grained：组织通常不会给外部仓库批 fine-grained 申请），
+# scope 只勾 public_repo 就够（模块仓库是公开仓库）。
+# 然后在本仓库 Settings → Secrets and variables → Actions 里加名为 MODULE_REPO_TOKEN 的 secret。
 #
 # 用法：推一个 v* 标签（比如 git tag v0.6.0 && git push --tags），或者手动点 Run workflow。
 # release 的 tag 会自动取 build.gradle.kts 里的 versionCode-versionName（官方要求这个格式）。
