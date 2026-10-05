@@ -76,6 +76,7 @@ import dev.goutou.wingman.llm.LlmClient
 import dev.goutou.wingman.llm.LlmException
 import dev.goutou.wingman.llm.NetInfo
 import dev.goutou.wingman.llm.RemoteSkill
+import dev.goutou.wingman.llm.Graded
 import dev.goutou.wingman.llm.REWRITE_PRESETS
 import dev.goutou.wingman.llm.Suggestion
 import dev.goutou.wingman.wechat.ChatMsg
@@ -282,7 +283,15 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
             if (cfg.apiKey.isBlank()) "未填写，到「设置」填" else "已填写（明文存本机，见设置页说明）",
             if (cfg.apiKey.isBlank()) Level.BAD else Level.OK,
         ),
-        Check("接口与模型", "${cfg.model} · ${cfg.baseUrl}", if (cfg.baseUrl.startsWith("http")) Level.OK else Level.BAD),
+        Check(
+            "接口与模型",
+            if (cfg.graded) {
+                "${cfg.model}（写回复）+ ${cfg.riskEndpoint().model}（风险） · 分级模式"
+            } else {
+                "${cfg.model} · ${cfg.baseUrl}"
+            },
+            if (cfg.baseUrl.startsWith("http")) Level.OK else Level.BAD,
+        ),
         Check(
             "当前军师",
             "${skillName(cfg.skillId)}" +
@@ -528,10 +537,28 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
                                 val me = it.startsWith("我:") || it.startsWith("我：")
                                 ChatMsg(me, it.substringAfter(':').substringAfter('：').trim().ifEmpty { it })
                             }
-                            val result = withContext(Dispatchers.IO) { LlmClient(conf).analyze(msgs) }
-                            suggestion = result.suggestion
-                            if (result.totalTokens > 0) store.addUsage(result.totalTokens)
-                            info = "${result.millis}ms · ${result.totalTokens} token · ${result.model}"
+                            if (conf.graded) {
+                                val out = withContext(Dispatchers.IO) {
+                                    Graded.run(
+                                        replyClient = LlmClient(conf),
+                                        riskClient = LlmClient(conf.riskEndpoint()),
+                                        skillPrompt = conf.prompt,
+                                        msgs = msgs,
+                                        roleContext = null,
+                                    )
+                                }
+                                suggestion = out.suggestion
+                                if (out.totalTokens > 0) store.addUsage(out.totalTokens)
+                                info = "${out.millis}ms · ${out.totalTokens} token · 分级模式（两路并行）"
+                                if (out.suggestion == null) {
+                                    error = "两路都没跑通：风险一路 ${out.riskError ?: "-"}；写回复一路 ${out.replyError ?: "-"}"
+                                }
+                            } else {
+                                val result = withContext(Dispatchers.IO) { LlmClient(conf).analyze(msgs) }
+                                suggestion = result.suggestion
+                                if (result.totalTokens > 0) store.addUsage(result.totalTokens)
+                                info = "${result.millis}ms · ${result.totalTokens} token · ${result.model}"
+                            }
                         } catch (t: Throwable) {
                             error = t.message
                         }
@@ -558,6 +585,11 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
                     fontSize = 11.sp,
                     color = palette.warn,
                 )
+            }
+            // 分级模式：哪一路挂了/没拿到回复，直接写出来，别让人对着空卡片猜
+            s.warnings.forEach { w -> Text(w, fontSize = 11.sp, color = palette.warn) }
+            if (s.replies.isEmpty()) {
+                Text("⚠ 这次没拿到可用回复，点上面「生成候选回复」重来", fontSize = 11.sp, color = palette.warn)
             }
             s.replies.forEachIndexed { index, reply ->
                 val starred = s.best == index
@@ -1090,6 +1122,67 @@ fun AdvancedScreen(
                 fontSize = 11.sp,
                 color = palette.sub,
             )
+        }
+
+        GlassCard(d.glassAlpha) {
+            Text("生成模式", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                GlassPill("直通（一套接口）", !d.graded, Modifier.weight(1f)) { update(d.copy(graded = false)) }
+                GlassPill("模型分级", d.graded, Modifier.weight(1f)) { update(d.copy(graded = true)) }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (!d.graded) {
+                    "直通：所有事都交给一套接口 + 一份提示词，一次调用搞定（默认，和以前一样）。"
+                } else {
+                    "分级：拆成两路**并行**跑 —— 一路只判意图与风险，另一路只写 3 条回复，最后合成一张卡片。" +
+                        "任一路挂了另一路照常显示（风险会标成「未评估」）。"
+                },
+                fontSize = 11.sp,
+                color = palette.sub,
+            )
+            if (d.graded) {
+                Spacer(Modifier.height(10.dp))
+                Text("第二套接口（只给「风险评估」那一路用）", fontSize = 12.sp, color = palette.sub)
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = d.baseUrl2,
+                    onValueChange = { update(d.copy(baseUrl2 = it)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("接口地址（留空 = 复用上面那套）") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = d.apiKey2,
+                    onValueChange = { update(d.copy(apiKey2 = it)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("API Key（留空 = 复用）") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = d.model2,
+                    onValueChange = { update(d.copy(model2 = it)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("模型（留空 = 复用）") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                GlassPill("同上（三格都清空 = 复用第一套）", false, Modifier.fillMaxWidth()) {
+                    update(d.copy(baseUrl2 = "", apiKey2 = "", model2 = ""))
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "留空就复用第一套 —— 那等于「同一个模型拆两路提示词」，也完全能用。" +
+                        "想省钱可以给风险那一路单独配个便宜的小模型（比如轻量档）。" +
+                        "第二套不参与首页的「接口自检」，配错了会在卡片上直接写出来。",
+                    fontSize = 11.sp,
+                    color = palette.sub,
+                )
+            }
         }
 
         GlassCard(d.glassAlpha) {

@@ -25,6 +25,7 @@ import dev.goutou.wingman.config.Roles
 import dev.goutou.wingman.config.RoleMsg
 import dev.goutou.wingman.llm.LlmClient
 import dev.goutou.wingman.llm.LlmException
+import dev.goutou.wingman.llm.Graded
 import dev.goutou.wingman.llm.REWRITE_PRESETS
 import dev.goutou.wingman.llm.Reply
 import dev.goutou.wingman.llm.Suggestion
@@ -682,14 +683,35 @@ internal class Panel(private val a: Activity) {
             var suggestion: Suggestion? = null
             var tokens = 0
             var error: Throwable? = null
-            var trace = ""
+            // 分级模式会跑两路，两边的 trace 都要留着 —— 用同步表收，普通 StringBuilder 会互相踩
+            val traces = java.util.Collections.synchronizedList(mutableListOf<String>())
             try {
-                val result = LlmClient(cfg, onTrace = { trace = it }).analyze(msgs, roleContext)
-                suggestion = result.suggestion
-                tokens = result.totalTokens
+                if (cfg.graded) {
+                    val out = Graded.run(
+                        replyClient = LlmClient(cfg, onTrace = { traces.add("【写回复一路】\n$it") }),
+                        riskClient = LlmClient(cfg.riskEndpoint(), onTrace = { traces.add("【风险评估一路】\n$it") }),
+                        skillPrompt = cfg.prompt,
+                        msgs = msgs,
+                        roleContext = roleContext,
+                    )
+                    suggestion = out.suggestion
+                    tokens = out.totalTokens
+                    // 两路都挂了才当整体失败；只挂一路时 suggestion 里带着 warnings，照常渲染
+                    if (out.suggestion == null) {
+                        error = LlmException(
+                            "两路都没跑通",
+                            "风险一路：${out.riskError ?: "-"}\n写回复一路：${out.replyError ?: "-"}",
+                        )
+                    }
+                } else {
+                    val result = LlmClient(cfg, onTrace = { traces.add(it) }).analyze(msgs, roleContext)
+                    suggestion = result.suggestion
+                    tokens = result.totalTokens
+                }
             } catch (t: Throwable) {
                 error = t
             }
+            val trace = traces.joinToString("\n\n")
             // 顺带回传「这次实际发出去的那一份」，App 首页可以对着核对 skill 有没有真的生效
             Heartbeat.send(a, tokens, call = trace.takeIf { it.isNotBlank() })
             val ok = suggestion
@@ -792,6 +814,10 @@ internal class Panel(private val a: Activity) {
         if (s.note.isNotBlank()) {
             bodyBox.addView(label(s.note, 12f, colorSub) { setPadding(0, dp(4), 0, dp(2)) })
         }
+        // 分级模式：哪一路挂了直接写在卡片上（另一路的内容照常显示）
+        s.warnings.forEach { w ->
+            bodyBox.addView(label(w, 11f, colorWarn) { setPadding(0, dp(4), 0, 0) })
+        }
         s.replies.forEachIndexed { index, r ->
             val starred = s.best == index
             val head = if (starred) "★ ${r.style}" else r.style
@@ -864,7 +890,8 @@ internal class Panel(private val a: Activity) {
                 buildString {
                     append("点一下填入输入框 · 长按复制 · 本模块不会自动发送")
                     append("\nAI 生成，发送前请自行判断")
-                    if (s.partial) append("\n⚠ 模型输出被截断，这份是抢救出来的，建议点「刷新」重来")
+                    if (s.partial) append("\n⚠ 模型输出被截断，这份是抢救出来的，建议点「↻ 重新识别」重来")
+                    if (s.replies.isEmpty()) append("\n⚠ 这次没拿到可用回复，点「↻ 重新识别」重来")
                 },
                 10f,
                 colorSub,
