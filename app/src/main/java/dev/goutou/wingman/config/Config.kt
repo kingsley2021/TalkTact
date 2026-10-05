@@ -82,6 +82,13 @@ object Keys {
     const val WHITELIST_ON = "whitelist_on"
     /** 白名单：会话名（归一化过的，见 Roles.normalizeKey） */
     const val WHITELIST = "whitelist"
+    /** App 里点「拉取会话列表」时写一个时间戳；注入侧看到比上次新就去读当前这屏的会话名 */
+    const val CHAT_REQ = "chats_req"
+    /** 注入侧回传的会话名候选（已归一化、已去重）—— 白名单页拿它当候选 */
+    const val CHAT_CANDIDATES = "chat_candidates"
+    /** 上次拉取时的现场说明（扫到几个列表 / 几行 / 认出几个名字），拉不到东西时靠它排查 */
+    const val CHAT_INFO = "chat_info"
+    const val CHAT_AT = "chat_at"
 }
 
 /** 默认几点跑。 */
@@ -315,6 +322,20 @@ class ConfigStore(context: Context) {
         sp.edit().putString(Keys.PROXY_TOKEN, "").apply()
         return ensureProxyToken()
     }
+
+    /** 请求注入侧读一次「当前这屏看得见的会话名」（白名单页的「拉取会话列表」）。 */
+    fun requestChats(): Long {
+        val now = System.currentTimeMillis()
+        sp.edit().putLong(Keys.CHAT_REQ, now).apply()
+        return now
+    }
+
+    /** 注入侧回传的会话名候选（归一化过、已去重；上限 300）。 */
+    fun chatCandidates(): Set<String> = sp.getStringSet(Keys.CHAT_CANDIDATES, emptySet()).orEmpty()
+
+    /** 上次拉取的现场说明 + 时间戳（空串 / 0 = 还没拉过）。 */
+    fun chatPullInfo(): Pair<String, Long> =
+        sp.getString(Keys.CHAT_INFO, "").orEmpty() to sp.getLong(Keys.CHAT_AT, 0L)
 
     /** 注入侧最近一次实际走的路线（proxy / direct；空 = 还没回传过）+ 时间戳。 */
     fun lastRoute(): Pair<String, Long> =

@@ -225,12 +225,7 @@ internal class ViewReader(private val a: Activity) {
             val top = loc[1]
             val bottom = top + h
 
-            val looksList = v is AbsListView || v is ScrollView ||
-                v.javaClass.name.contains("RecyclerView") ||
-                v.javaClass.name.contains("ListView") ||
-                v.javaClass.name.contains("ScrollView") ||
-                v.canScrollVertically(1) || v.canScrollVertically(-1)
-            if (!looksList) return@walk
+            if (!looksLikeList(v)) return@walk
 
             val onScreen = loc[0] < width && loc[0] + w > 0 && bottom > 0 && top < height
             val startsAboveInput = top < inputTop
@@ -265,6 +260,66 @@ internal class ViewReader(private val a: Activity) {
                 "位置不合格=${rejected.take(4).joinToString(" / ").ifEmpty { "无" }}"
         }
         return chosen
+    }
+
+    /** 「像个能滚动的列表」—— findList 和 [conversationNames] 共用一套，免得两处规则跑偏。 */
+    private fun looksLikeList(v: View): Boolean = v is AbsListView || v is ScrollView ||
+        v.javaClass.name.contains("RecyclerView") ||
+        v.javaClass.name.contains("ListView") ||
+        v.javaClass.name.contains("ScrollView") ||
+        v.canScrollVertically(1) || v.canScrollVertically(-1)
+
+    /**
+     * 当前这一屏（微信首页 / 通讯录）里看得见的会话名 —— 「白名单」页的候选靠它。
+     *
+     * 判据只有一条：**最大的那个像列表的容器**。不认类名、也不判断「这是不是首页」——
+     * 靠类名猜页面（LauncherUI…）正是这个模块一直在避免的事（微信一改版本就失效）；
+     * 而在朋友圈 / 设置页上跑，读出来自然就是空的，无害。
+     *
+     * 返回 (名字们, 现场说明)：拉不到东西时，说明里那一句就是排查的全部线索。
+     */
+    fun conversationNames(root: View): Pair<List<String>, String> {
+        val lists = ArrayList<ViewGroup>()
+        walk(root) { v ->
+            if (v !is ViewGroup || !v.isShown) return@walk
+            if (v.childCount < 3) return@walk
+            if (!looksLikeList(v)) return@walk
+            val h = v.height
+            if (h <= 0) return@walk
+            val loc = IntArray(2)
+            v.getLocationOnScreen(loc)
+            if (loc[1] + h <= 0 || loc[1] >= height) return@walk
+            // 会话列表占大半个屏幕；太矮的多半是底部 tab 栏或某个折叠区
+            if (h < height * 0.35f) return@walk
+            lists.add(v)
+        }
+        val chosen = lists.maxByOrNull { it.width.toLong() * it.height }
+            ?: return emptyList<String>() to "没找到像「会话列表」的容器（候选=${lists.size}）"
+
+        val names = LinkedHashSet<String>()
+        var rows = 0
+        for (i in 0 until chosen.childCount) {
+            val row = chosen.getChildAt(i) ?: continue
+            if (!row.isShown) continue
+            rows++
+            pickRowName(rowCandidates(row))?.let { names.add(it) }
+        }
+        return names.toList() to "列表=${describe(chosen)}｜行=$rows｜认出名字=${names.size}"
+    }
+
+    /** 把一行里所有带文字的子视图收成候选，交给纯函数 [pickRowName] 挑。 */
+    private fun rowCandidates(row: View): List<NameCandidate> {
+        val out = ArrayList<NameCandidate>()
+        walk(row, includeInvisible = false) { v ->
+            if (!v.isShown) return@walk
+            val t = (if (v is TextView) v.text?.toString() else TextCapture.textOf(v)?.toString())
+                ?.trim().orEmpty()
+            if (t.isEmpty() || t.length > 40) return@walk
+            val loc = IntArray(2)
+            v.getLocationOnScreen(loc)
+            out.add(NameCandidate(t, (v as? TextView)?.textSize ?: 0f, loc[1], loc[0]))
+        }
+        return out
     }
 
     // ---------------- 读内容 ----------------

@@ -31,6 +31,10 @@ object Heartbeat {
         roles: String? = null,
         /** 这次调用实际走的路线（proxy / direct），回传给 App 显示 */
         route: String? = null,
+        /** 会话名候选（换行分隔）—— 白名单页的「拉取会话列表」用它 */
+        chats: String? = null,
+        /** 上面那次拉取的现场说明（扫到几个列表 / 几行），拉不到东西时靠它排查 */
+        chatsInfo: String? = null,
     ) {
         try {
             val intent = Intent(ACTION).setPackage(MODULE_PKG).putExtra("tokens", tokens)
@@ -39,6 +43,8 @@ object Heartbeat {
             if (call != null) intent.putExtra("call", call)
             if (roles != null) intent.putExtra("roles", roles)
             if (route != null) intent.putExtra("route", route)
+            if (chats != null) intent.putExtra("chats", chats)
+            if (chatsInfo != null) intent.putExtra("chatsInfo", chatsInfo)
             context.sendBroadcast(intent, PERMISSION)
         } catch (t: Throwable) {
             // 广播失败不影响主流程
@@ -72,6 +78,28 @@ class HeartbeatReceiver : BroadcastReceiver() {
         intent.getStringExtra("route")?.let {
             editor.putString(Keys.ROUTE, it)
             editor.putLong(Keys.ROUTE_AT, System.currentTimeMillis())
+        }
+        // 会话名候选：给「白名单」页用。名字统一走 normalizeKey —— 微信标题常带未读数（张三(3)），
+        // 而白名单里存的本来就是归一化过的 key，两边必须同一套，否则「拉回来却勾不上」。
+        val chats = intent.getStringExtra("chats")
+        val chatsInfo = intent.getStringExtra("chatsInfo")
+        if (chats != null || chatsInfo != null) {
+            if (!chats.isNullOrBlank()) {
+                val incoming = chats.split('\n')
+                    .map { dev.goutou.wingman.config.Roles.normalizeKey(it) }
+                    .filter { it.isNotBlank() && it.length <= 32 }
+                if (incoming.isNotEmpty()) {
+                    val merged = LinkedHashSet(sp.getStringSet(Keys.CHAT_CANDIDATES, emptySet()).orEmpty())
+                    merged.addAll(incoming)
+                    editor.putStringSet(
+                        Keys.CHAT_CANDIDATES,
+                        if (merged.size <= 300) merged.toHashSet() else merged.toList().takeLast(300).toHashSet(),
+                    )
+                }
+            }
+            if (chatsInfo != null) editor.putString(Keys.CHAT_INFO, chatsInfo)
+            // 只要收到了回应就刷时间戳 —— 界面靠它显示「上次拉取于 …」，拉空也算拉过
+            editor.putLong(Keys.CHAT_AT, System.currentTimeMillis())
         }
         // 「角色」的聊天记录：注入侧每轮把新读到的消息回传，这里按 1 小时窗口查重后合并
         intent.getStringExtra("roles")?.let { payload ->

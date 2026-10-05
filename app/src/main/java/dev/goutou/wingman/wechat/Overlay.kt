@@ -122,6 +122,12 @@ internal class Panel(private val a: Activity) {
     private var whitelistNameNotified = false
     private var chatName = ""
     private var chatNameFor = ""
+    /** 打开会话时顺手认出来的名字（给「白名单」页当候选）；白名单关着时一条都不收。 */
+    private val seenChats = LinkedHashSet<String>()
+    /** 上一次读会话列表的时间 / 已处理到哪个请求 / 上次回传过的那一批（免得每 2.6 秒重发）。 */
+    private var lastConvPullAt = 0L
+    private var lastConvReq = 0L
+    private var lastConvNames = ""
     private val sentMsgs = HashSet<String>()
     private var lastAttachTry = 0L
     private var noListTicks = 0
@@ -318,6 +324,8 @@ internal class Panel(private val a: Activity) {
                         "（判定要求 宽>${dp(50)}、位于屏幕下 70%、isShown）",
                 )
             }
+            // 「不是聊天页」的那一屏 —— 顺便把看得见的会话名收回去（只在这儿试，聊天页会读到消息）
+            maybePullConversations(decor)
             hideAll()
             return
         }
@@ -472,6 +480,54 @@ internal class Panel(private val a: Activity) {
     private fun blockedByWhitelist(c: ConfigData): Boolean =
         chatBlocked(c.whitelistEnabled, c.whitelist, chatName)
 
+    /**
+     * 顺手把一个「认出来的会话名」记回去，给「白名单」页当候选。
+     *
+     * 只在白名单开着时收：这份数据本来就是给白名单用的，不打算用它的人，
+     * 模块不该去攒他的联系人名单（`publish/PRIVACY.md` 里就是这么承诺的）。
+     * 也就是说 —— 白名单开着却一条都没加时，你打开过的那些会话会自己出现在候选里，
+     * 不用去微信首页翻。
+     */
+    private fun rememberChatName(name: String) {
+        if (name.isBlank() || !seenChats.add(name)) return
+        val c = config ?: return
+        if (!c.whitelistEnabled) return
+        Heartbeat.send(a, 0, chats = name)
+    }
+
+    /**
+     * 「不是聊天页」的那一屏（微信首页 / 通讯录）：把看得见的会话名回传回去。
+     *
+     * 只在两种时候做：白名单开着（要用它），或者 App 里刚点过「拉取会话列表」（明确授权）。
+     * 手动点的那次无论认出几个都要回一句（哪怕是零）—— 否则用户分不清是「没生效」还是「还没拉到」。
+     */
+    private fun maybePullConversations(decor: View) {
+        val c = config
+        val req = prefs?.getLong(Keys.CHAT_REQ, 0L) ?: 0L
+        val fresh = req > lastConvReq
+        if (!fresh && c?.whitelistEnabled != true) return
+        val now = System.currentTimeMillis()
+        // 这一屏每 2.6 秒 tick 一次，没必要次次把整棵视图树读一遍
+        if (!fresh && now - lastConvPullAt < CONV_PULL_MIN_MS) return
+        lastConvPullAt = now
+        if (fresh) lastConvReq = req
+        try {
+            val (names, info) = reader.conversationNames(decor)
+            if (fresh) {
+                Heartbeat.send(a, 0, chats = names.joinToString("\n"), chatsInfo = info)
+                return
+            }
+            val joined = names.joinToString("\n")
+            // 名字没变就不重复发（用户滚动列表时才会变）
+            if (names.isNotEmpty() && joined != lastConvNames) {
+                lastConvNames = joined
+                Heartbeat.send(a, 0, chats = joined, chatsInfo = info)
+            }
+        } catch (t: Throwable) {
+            XposedApi.log("读会话列表失败: $t")
+        }
+    }
+
     private fun recordToRoles(decor: View, list: ViewGroup, msgs: List<ChatMsg>, fingerprint: String) {
         try {
             if (chatNameFor != fingerprint) {
@@ -489,6 +545,8 @@ internal class Panel(private val a: Activity) {
                         "认不出会话名，这一页不记录",
                         extra = reader.describeTitleCandidates(decor, list),
                     )
+                } else {
+                    rememberChatName(chatName)
                 }
                 // 白名单没勾这个会话 → 「彻底关闭」：这一页连记录都不做。
                 val c = config
@@ -1114,3 +1172,6 @@ internal class Panel(private val a: Activity) {
         }
     }
 }
+
+/** 「被动收集会话名」的最小间隔：那一屏每 2.6 秒 tick 一次，没必要次次都读整棵视图树。 */
+private const val CONV_PULL_MIN_MS = 15_000L

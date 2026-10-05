@@ -951,12 +951,20 @@ fun SettingsScreen(
     val palette = LocalPalette.current
     val context = LocalContext.current
     var d by remember { mutableStateOf(ui) }
-    var saved by remember { mutableStateOf(false) }
+    // 见「高级设置」里同名的那段：拿草稿和上次落盘的那份比，才知道有没有没保存的改动
+    var persisted by remember { mutableStateOf(ui) }
+    val dirty = d != persisted
 
     fun update(next: ConfigData) {
         d = next
-        saved = false
         onUi(next)
+    }
+
+    fun saveAppearance() {
+        store.save(d)
+        d = store.load()
+        persisted = d
+        onUi(d)
     }
 
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -1034,18 +1042,32 @@ fun SettingsScreen(
                 color = palette.sub,
             )
             Spacer(Modifier.height(14.dp))
-            // 外观现在自己带一个保存按钮：接口那套已经搬进「高级设置」，别再共用一个「保存」了
-            Button(
-                onClick = {
-                    store.save(d)
-                    d = store.load()
-                    saved = true
-                    onUi(d)
-                },
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-            ) { Text(if (saved) "已保存" else "保存外观") }
+            // 外观现在自己带一个保存按钮：接口那套已经搬进「高级设置」，别再共用一个「保存」了。
+            // 滑杆是即时预览的，但**不点这个按钮就不会落盘** —— 红字挨着它。
+            if (dirty) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "未保存，你所做出的改动不会被保存",
+                        modifier = Modifier.weight(1f),
+                        fontSize = 11.sp,
+                        color = palette.bad,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Button(
+                        onClick = { saveAppearance() },
+                        modifier = Modifier.height(46.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                    ) { Text("保存外观") }
+                }
+            } else {
+                Button(
+                    onClick = { saveAppearance() },
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                ) { Text("已保存") }
+            }
         }
 
         GlassCard(d.glassAlpha) {
@@ -1101,13 +1123,23 @@ fun AdvancedScreen(
     val palette = LocalPalette.current
     val context = LocalContext.current
     var d by remember { mutableStateOf(ui) }
-    var saved by remember { mutableStateOf(false) }
     var includeKey by remember { mutableStateOf(true) }
     var backupNote by remember { mutableStateOf<String?>(null) }
+    // 「有没有还没点保存的改动」：拿草稿和**上次落盘的那份**比。
+    // 不能只看一个「保存过没有」的标志 —— 它一开始就是「没保存过」，
+    // 会把刚打开的页面也说成「未保存」，红字就废了。
+    var persisted by remember { mutableStateOf(ui) }
+    val dirty = d != persisted
 
     fun update(next: ConfigData) {
         d = next
-        saved = false
+    }
+
+    fun saveAll() {
+        store.save(d)
+        d = store.load()
+        persisted = d
+        onSaved()
     }
 
     /**
@@ -1121,6 +1153,7 @@ fun AdvancedScreen(
     fun saveWhitelist(enabled: Boolean, chats: Set<String>) {
         d = d.copy(whitelistEnabled = enabled, whitelist = chats)
         store.save(store.load().copy(whitelistEnabled = enabled, whitelist = chats))
+        persisted = store.load()
         onSaved()
     }
 
@@ -1148,6 +1181,7 @@ fun AdvancedScreen(
                     store.save(result.config)
                     store.saveRoles(result.roles)
                     d = store.load()
+                    persisted = d
                     onSaved()
                     "已导入：配置 + ${result.roleCount} 个角色"
                 }
@@ -1160,6 +1194,25 @@ fun AdvancedScreen(
     var diagNote by remember { mutableStateOf<String?>(null) }
     var proxyNote by remember { mutableStateOf<String?>(null) }
     var whitelistNote by remember { mutableStateOf<String?>(null) }
+    // 会话名候选是注入侧用广播回传的，这一页不会自己重组 —— 停在这里时每 1.5 秒自己看一眼。
+    // （去微信转一圈再回来，看到的就是刚回传的那份。）
+    val pulled by produceState(initialValue = store.chatCandidates() to store.chatPullInfo()) {
+        // 轮询**有上限**（约 5 分钟）：一个是别让这个页面永远挂着定时任务，
+        // 另一个是单元测试里跑渲染回归时，无限循环的协程可能把测试挂住 —— 有界就没有这种风险。
+        repeat(200) {
+            kotlinx.coroutines.delay(1500)
+            value = store.chatCandidates() to store.chatPullInfo()
+        }
+    }
+    val cands = pulled.first
+    val pullInfo = pulled.second.let { (info, at) ->
+        if (at <= 0L) {
+            "还没拉过"
+        } else {
+            info.ifBlank { "已收到回传" } + " · " +
+                java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(at))
+        }
+    }
     var newChat by remember { mutableStateOf("") }
     val proxyScope = rememberCoroutineScope()
     // 13+ 才有的通知权限。注意：前台服务**没有**它也照样能跑（系统仍会显示这条常驻通知），
@@ -1292,6 +1345,7 @@ fun AdvancedScreen(
                         // 等用户再点一次「保存」的话，这里会有一段「看起来开了其实没开」的空窗。
                         store.save(d.copy(proxyEnabled = on))
                         d = store.load()
+                        persisted = d
                         if (on) {
                             store.ensureProxyToken()
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -1522,17 +1576,32 @@ fun AdvancedScreen(
                 Switch(checked = !d.allowSensitive, onCheckedChange = { update(d.copy(allowSensitive = !it)) })
             }
             Spacer(Modifier.height(14.dp))
-            Button(
-                onClick = {
-                    store.save(d)
-                    d = store.load()
-                    saved = true
-                    onSaved()
-                },
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-            ) { Text(if (saved) "已保存（微信里下次识别即生效）" else "保存") }
+            // 这一页只有这一个保存按钮，而接口地址 / 生成模式 / 参考条数 / temperature 全是草稿 ——
+            // 不点它就一概不生效。所以红字必须挨着它，别让人以为改完就已经算数了。
+            if (dirty) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "未保存，你所做出的改动不会被保存",
+                        modifier = Modifier.weight(1f),
+                        fontSize = 11.sp,
+                        color = palette.bad,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Button(
+                        onClick = { saveAll() },
+                        modifier = Modifier.height(46.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                    ) { Text("保存") }
+                }
+            } else {
+                Button(
+                    onClick = { saveAll() },
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                ) { Text("已保存（微信里下次识别即生效）") }
+            }
         }
 
         GlassCard(d.glassAlpha) {
@@ -1624,10 +1693,69 @@ fun AdvancedScreen(
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "⚠ 名字要和微信里显示的一致（群聊就填群名；改过备注/昵称的用改过之后的名字）。\n" +
-                        "「点一下自动拉取所有好友和群聊」在下一版做 —— 现在先手动填。",
+                        "懒得敲字就用下面的「拉取会话列表」。",
                     fontSize = 11.sp,
                     color = palette.sub,
                 )
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Text("从微信里列出来", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text(
+                "点一下，然后回微信的**首页**或**通讯录**停两秒（滚一下能多收几个），再回来这里勾。\n" +
+                    "白名单开着的时候，你打开过的会话也会自己进来。",
+                fontSize = 11.sp,
+                color = palette.sub,
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = {
+                        store.requestChats()
+                        whitelistNote = "已请求 · 回微信首页 / 通讯录停两秒，再回来这里看"
+                    },
+                    modifier = Modifier.height(44.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                ) { Text("拉取会话列表") }
+                Text(pullInfo, fontSize = 11.sp, color = palette.sub, modifier = Modifier.weight(1f))
+            }
+            val todo = cands.filter { it !in d.whitelist }.sorted()
+            if (todo.isEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    if (cands.isEmpty()) "还没收到候选 —— 点上面的按钮，然后去微信首页停两秒。"
+                    else "候选（${cands.size} 个）都已经加进去了。",
+                    fontSize = 11.sp,
+                    color = palette.sub,
+                )
+            } else {
+                Spacer(Modifier.height(6.dp))
+                Text("还没加进去的（${todo.size}）：", fontSize = 11.sp, color = palette.sub)
+                todo.take(24).forEach { name ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(name, fontSize = 13.sp, color = palette.text, modifier = Modifier.weight(1f))
+                        Text(
+                            "加入",
+                            fontSize = 12.sp,
+                            color = palette.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    saveWhitelist(d.whitelistEnabled, d.whitelist + name)
+                                    whitelistNote = "已加入「$name」"
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+                if (todo.size > 24) {
+                    Text(
+                        "还有 ${todo.size - 24} 个没列出来 —— 把上面这些加完再回来。",
+                        fontSize = 11.sp,
+                        color = palette.sub,
+                    )
+                }
             }
             whitelistNote?.let {
                 Spacer(Modifier.height(6.dp))
