@@ -4,7 +4,9 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -907,11 +909,13 @@ private val RELATIONS = listOf("家人", "恋人", "暧昧", "朋友", "同学",
  * 按会话名归档回来（1 小时内重复只留一条）。点进某人可以写「TA 是你什么人」和「平时的关系」，
  * 这两样 + 之前攒下的聊天记录会一起拼进提示词，直接影响当前 skill 生成出来的回复。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (String?) -> Unit) {
     val palette = LocalPalette.current
     var tick by remember { mutableStateOf(0) }
     val roles = remember(tick) { store.roles() }
+    var pendingDelete by remember { mutableStateOf<String?>(null) }
     val current = open?.let { name -> roles.firstOrNull { it.name == name } }
 
     if (open != null && current != null) {
@@ -932,7 +936,8 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
             Text(
                 "模块会在你打开某个聊天页时，把读到的消息按联系人归档到这里（1 小时内重复的内容只留一条）。\n" +
                     "点进某个人，写上「TA 是你什么人」和「平时的关系」—— 这些会连同之前攒下的聊天记录一起，\n" +
-                    "拼进提示词，直接影响「军师」生成出来的回复。",
+                    "拼进提示词，直接影响「军师」生成出来的回复。\n" +
+                    "长按某一项可以直接删除它。",
                 fontSize = 12.sp,
                 color = palette.sub,
             )
@@ -952,7 +957,12 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
 
         roles.forEach { role ->
             GlassCard(glassAlpha, border = palette.primary.copy(alpha = if (role.relation.isBlank()) 0.15f else 0.5f)) {
-                Column(Modifier.fillMaxWidth().clickable { onOpen(role.name) }) {
+                Column(
+                    Modifier.fillMaxWidth().combinedClickable(
+                        onClick = { onOpen(role.name) },
+                        onLongPress = { pendingDelete = role.name },
+                    ),
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(role.name, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = palette.text, modifier = Modifier.weight(1f))
                         Text("${role.msgs.size} 条", fontSize = 12.sp, color = palette.sub)
@@ -970,6 +980,22 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                 }
             }
         }
+    }
+
+    pendingDelete?.let { name ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除角色「$name」？") },
+            text = { Text("档案和记录一起删掉，无法恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    store.removeRole(name)
+                    pendingDelete = null
+                    tick++
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
+        )
     }
 }
 
