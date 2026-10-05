@@ -11,11 +11,34 @@ android {
         applicationId = "io.github.shibry88_netizen.talktact"
         minSdk = 31  // Android 12+：液态玻璃的真实背景模糊走 RenderEffect
         targetSdk = 34
-        versionCode = 22
-        versionName = "0.6.1"
+        versionCode = 23
+        versionName = "0.6.2"
+    }
+    /**
+     * 固定签名。
+     *
+     * 为什么需要：GitHub Actions 每次跑在全新 runner 上，默认的 ~/.android/debug.keystore
+     * 是**每次重建**的 —— 于是每个版本的签名都不一样，覆盖安装会直接报
+     * INSTALL_FAILED_UPDATE_INCOMPATIBLE (-7)。把钥匙固定下来（提交在本仓库里），
+     * 本地和 CI 签出来就是同一份，升级才装得上。
+     *
+     * 注意：这把 key 是公开的，它只用来保证「同一个应用能连续升级」，**不构成任何安全边界**。
+     */
+    signingConfigs {
+        create("stable") {
+            storeFile = file("../keystore/talktact.p12")
+            storePassword = "talktact"
+            keyAlias = "talktact"
+            keyPassword = "talktact"
+            storeType = "PKCS12"
+        }
     }
     buildTypes {
-        release { isMinifyEnabled = false }
+        debug { signingConfig = signingConfigs.getByName("stable") }
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("stable")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
