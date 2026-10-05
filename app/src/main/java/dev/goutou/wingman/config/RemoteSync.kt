@@ -44,7 +44,11 @@ object RemoteSync {
      * 所以这里必须留一个强引用（object 的字段正好满足）。
      */
     private val changeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key != null) push(key)
+        if (key != null) {
+            push(key)
+            // 代理开关一变，「Key 要不要推给注入侧」也跟着变 —— 得补推一次 api_key
+            if (key == Keys.PROXY_ON) push(Keys.KEY)
+        }
     }
 
     private val serviceListener = object : XposedServiceHelper.OnServiceListener {
@@ -117,6 +121,13 @@ object RemoteSync {
         val ctx = appContext ?: return
         try {
             val value = local(ctx).all[key] ?: return
+            // 开了本地代理 → API Key 绝不外推到注入进程。
+            // 注入侧这时拿到的是空串，它改用 proxyToken 请求 127.0.0.1 上的代理 —— 这就是
+            // 「Key 不出 App 进程」的实现方式：不是加密，而是**根本不给**。
+            if (key == Keys.KEY && local(ctx).getBoolean(Keys.PROXY_ON, false)) {
+                p.edit().putString(key, "").apply()
+                return
+            }
             val editor = p.edit()
             when (value) {
                 is String -> editor.putString(key, value)

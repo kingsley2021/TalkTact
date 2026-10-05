@@ -71,6 +71,10 @@ object Keys {
     /** 「接口自检」量到的两路延迟（ms）；设置页的公告栏与「两路对齐等待」都用它 */
     const val PROBE_REPLY_MS = "probe_reply_ms"
     const val PROBE_RISK_MS = "probe_risk_ms"
+    /** 本地代理：开了以后 API Key 不再镜像给注入侧，改用随机 token 走回环 */
+    const val PROXY_ON = "proxy_on"
+    const val PROXY_PORT = "proxy_port"
+    const val PROXY_TOKEN = "proxy_token"
 }
 
 /** 默认几点跑。 */
@@ -149,6 +153,14 @@ data class ConfigData(
      */
     val probeReplyMs: Long = 0L,
     val probeRiskMs: Long = 0L,
+    /**
+     * 本地代理开关。开了以后**注入侧拿不到 API Key**（RemoteSync 会把 api_key 推成空串），
+     * 它改用 [proxyToken] 去请求本机回环端口。
+     */
+    val proxyEnabled: Boolean = false,
+    val proxyPort: Int = 8799,
+    /** 随机 token；由 [ConfigStore.ensureProxyToken] 生成。和 selfStyle* 一样是**只读**字段，save() 不碰。 */
+    val proxyToken: String = "",
 ) {
     /**
      * 分级模式下「风险评估」那一路要用的接口。
@@ -204,6 +216,9 @@ data class ConfigData(
             jsonMode = p.getBoolean(Keys.JSON_MODE, false),
             probeReplyMs = p.getLong(Keys.PROBE_REPLY_MS, 0L).coerceAtLeast(0L),
             probeRiskMs = p.getLong(Keys.PROBE_RISK_MS, 0L).coerceAtLeast(0L),
+            proxyEnabled = p.getBoolean(Keys.PROXY_ON, false),
+            proxyPort = p.getInt(Keys.PROXY_PORT, 8799).coerceIn(1024, 65535),
+            proxyToken = p.getString(Keys.PROXY_TOKEN, "").orEmpty(),
         )
 
     }
@@ -254,10 +269,27 @@ class ConfigStore(context: Context) {
             .putString(Keys.MODEL2, d.model2.trim())
             .putString(Keys.GLASS_QUALITY, d.glassQuality)
             .putBoolean(Keys.JSON_MODE, d.jsonMode)
+            .putBoolean(Keys.PROXY_ON, d.proxyEnabled)
+            .putInt(Keys.PROXY_PORT, d.proxyPort.coerceIn(1024, 65535))
             .apply()
     }
 
     fun usage(): Pair<Int, Int> = sp.getInt(Keys.CALLS, 0) to sp.getInt(Keys.TOKENS, 0)
+
+    /** 本地代理的 token：没有就生成一个 32 位随机串。只写这个 key，不走 save()。 */
+    fun ensureProxyToken(): String {
+        val cur = sp.getString(Keys.PROXY_TOKEN, "").orEmpty()
+        if (cur.isNotBlank()) return cur
+        val fresh = (1..32).map { "abcdefghijkmnpqrstuvwxyz23456789".random() }.joinToString("")
+        sp.edit().putString(Keys.PROXY_TOKEN, fresh).apply()
+        return fresh
+    }
+
+    /** 重新生成 token（怀疑被别的 App 蹭了就换一个）。 */
+    fun resetProxyToken(): String {
+        sp.edit().putString(Keys.PROXY_TOKEN, "").apply()
+        return ensureProxyToken()
+    }
 
     /** 自检测到的两路延迟（写回复 / 风险评估；0 = 没测过）。设置页的公告栏读它。 */
     fun probeMs(): Pair<Long, Long> =

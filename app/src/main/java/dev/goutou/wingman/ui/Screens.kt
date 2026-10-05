@@ -73,6 +73,8 @@ import dev.goutou.wingman.config.ConfigData
 import dev.goutou.wingman.config.Backup
 import dev.goutou.wingman.config.ConfigStore
 import dev.goutou.wingman.config.DiagExport
+import dev.goutou.wingman.proxy.ProxyProtocol
+import dev.goutou.wingman.proxy.ProxyService
 import dev.goutou.wingman.config.GLASS_QUALITY_AUTO
 import dev.goutou.wingman.config.GLASS_QUALITY_HIGH
 import dev.goutou.wingman.config.GLASS_QUALITY_LOW
@@ -1137,6 +1139,8 @@ fun AdvancedScreen(
     }
 
     var diagNote by remember { mutableStateOf<String?>(null) }
+    var proxyNote by remember { mutableStateOf<String?>(null) }
+    val proxyScope = rememberCoroutineScope()
     val diagLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip"),
     ) { uri ->
@@ -1229,6 +1233,107 @@ fun AdvancedScreen(
                 fontSize = 11.sp,
                 color = palette.sub,
             )
+        }
+
+        GlassCard(d.glassAlpha) {
+            Text("本地代理（API Key 不出本应用）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text(
+                "开启后：聊天内容先送到本机的 127.0.0.1，由这个 App 带上 Key 去调你的接口。\n" +
+                    "注入到微信里的那段代码从此**拿不到 Key** —— 做法不是加密，是根本不给它。",
+                fontSize = 11.sp,
+                color = palette.sub,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("启用本地代理", fontSize = 15.sp, color = palette.text)
+                    Text(
+                        if (d.proxyEnabled) {
+                            "已开：App 需要保持运行（前台服务 + 一条常驻通知）"
+                        } else {
+                            "关着：走直连（Key 明文存在本机，并且会推给微信进程）"
+                        },
+                        fontSize = 11.sp,
+                        color = palette.sub,
+                    )
+                }
+                Switch(
+                    checked = d.proxyEnabled,
+                    onCheckedChange = { on ->
+                        // 开关立刻落盘：注入侧是按配置里的 proxyEnabled 决定走哪条路的，
+                        // 等用户再点一次「保存」的话，这里会有一段「看起来开了其实没开」的空窗。
+                        store.save(d.copy(proxyEnabled = on))
+                        d = store.load()
+                        if (on) {
+                            store.ensureProxyToken()
+                            ProxyService.start(context)
+                            proxyNote = "已开启。到微信里试一次识别；如果一直失败，把这里关掉就退回直连。"
+                        } else {
+                            ProxyService.stop(context)
+                            proxyNote = "已关闭：Key 会重新推给微信进程（下次识别生效）。"
+                        }
+                    },
+                )
+            }
+            if (d.proxyEnabled) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = d.proxyPort.toString(),
+                    onValueChange = { update(d.copy(proxyPort = it.toIntOrNull() ?: d.proxyPort)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("端口（1024-65535）") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            proxyNote = "测试中…"
+                            val port = d.proxyPort
+                            proxyScope.launch {
+                                proxyNote = withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        val c = (java.net.URL("http://127.0.0.1:$port${ProxyProtocol.PATH_HEALTH}")
+                                            .openConnection() as java.net.HttpURLConnection)
+                                        c.connectTimeout = 3_000
+                                        c.readTimeout = 3_000
+                                        val code = c.responseCode
+                                        runCatching { c.disconnect() }
+                                        code
+                                    }.fold(
+                                        { code -> if (code == 200) "代理正常（HTTP 200）" else "代理回话：HTTP $code" },
+                                        { err -> "连不上：${err.message} —— 是不是端口被占或服务没起来" },
+                                    )
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp),
+                    ) { Text("测试代理") }
+                    OutlinedButton(
+                        onClick = {
+                            store.resetProxyToken()
+                            d = store.load()
+                            proxyNote = "已换新 token（微信里下次识别生效）"
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp),
+                    ) { Text("换新 token") }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "⚠ 微信进程对 http 明文的策略不归我们管：如果开了之后微信里识别一直失败，" +
+                        "把这里关掉就退回直连（注入侧给的报错里也会这么提示）。\n" +
+                        "重启手机后代理不会自己回来，打开一次 App 就会自动恢复。",
+                    fontSize = 11.sp,
+                    color = palette.warn,
+                )
+            }
+            proxyNote?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, fontSize = 12.sp, color = palette.sub)
+            }
         }
 
         GlassCard(d.glassAlpha) {

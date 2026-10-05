@@ -1,6 +1,7 @@
 package dev.goutou.wingman.llm
 
 import dev.goutou.wingman.config.ConfigData
+import dev.goutou.wingman.proxy.ProxyProtocol
 import dev.goutou.wingman.wechat.ChatMsg
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -39,6 +40,31 @@ class LlmClient(
 ) {
 
     /**
+     * 出站地址。
+     *
+     * 开了本地代理就走本机回环（路径写死在 [ProxyProtocol] 里）：那段代码被注入在微信进程里，
+     * 手上只有一个随机 token，Key 在 App 进程那边 —— 这就是「Key 不出 App」的做法。
+     */
+    private fun outboundUrl(): String =
+        if (cfg.proxyEnabled && cfg.proxyToken.isNotBlank()) ProxyProtocol.urlFor(cfg.proxyPort)
+        else endpoint(cfg.baseUrl)
+
+    /** 出站凭据：代理模式给 token（App 会用真 Key 去调服务商），否则就是 API Key 本身。 */
+    private fun authHeader(): String =
+        "Bearer " + if (cfg.proxyEnabled) cfg.proxyToken else cfg.apiKey
+
+    /** 发起前的前置检查。代理模式下**不看 Key** —— 它本来就该是空的（App 根本没推过来）。 */
+    private fun requireReady() {
+        if (cfg.proxyEnabled) {
+            if (cfg.proxyToken.isBlank()) {
+                throw LlmException("本地代理的 token 是空的", "到 App 的「高级设置 → 本地代理」里关一下再开")
+            }
+        } else if (cfg.apiKey.isBlank()) {
+            throw LlmException("还没填 API Key", "到「设置」里填地址和 Key")
+        }
+    }
+
+    /**
      * @param roleContext 「角色」页攒下来的背景（TA 是你什么人 / 平时的关系 / 更早的聊天记录）。
      *   刻意拼进 user 消息而不是 system：skill 提示词要保持原样（App 里显示的字长、
      *   「最近一次调用」里核对的那份都是它），角色背景属于「这一次的素材」。
@@ -53,7 +79,7 @@ class LlmClient(
      * [analyze] 就是「用当前 skill 那一份」的快捷方式。
      */
     fun analyzeWith(systemText: String, msgs: List<ChatMsg>, roleContext: String? = null): LlmResult {
-        if (cfg.apiKey.isBlank()) throw LlmException("还没填 API Key", "到「设置」里填地址和 Key")
+        requireReady()
         if (msgs.isEmpty()) throw LlmException("没读到聊天内容", null)
 
         val start = System.currentTimeMillis()
@@ -94,7 +120,7 @@ class LlmClient(
         while (true) {
             val system = if (attempt == 0) systemText else systemText + "\n\n" + JSON_NUDGE
             try {
-                val root = parseResponse(post(endpoint(cfg.baseUrl), payloadFor(system)))
+                val root = parseResponse(post(outboundUrl(), payloadFor(system)))
                 val content = root.at("choices", "0", "message", "content").asStr()
                     ?: throw LlmException("返回里没有 choices[0].message.content", "确认模型名是否可用、该接口是否兼容 OpenAI 格式")
                 trace(system, userText, content)
@@ -129,7 +155,7 @@ class LlmClient(
      * 复用同一套 endpoint / post / 错误处理，省得两份请求代码各自漂移。
      */
     fun complete(systemText: String, userText: String): Pair<String, Int> {
-        if (cfg.apiKey.isBlank()) throw LlmException("还没填 API Key", "到「设置」里填地址和 Key")
+        requireReady()
         val fields = LinkedHashMap<String, JsonValue>()
         fields["model"] = str(cfg.model)
         // 提炼风格不需要发散：温度压低，免得每次结果跳来跳去
@@ -141,7 +167,7 @@ class LlmClient(
                 obj("role" to str("user"), "content" to str(userText)),
             ),
         )
-        val root = parseResponse(post(endpoint(cfg.baseUrl), Json.encode(JsonValue.Obj(fields))))
+        val root = parseResponse(post(outboundUrl(), Json.encode(JsonValue.Obj(fields))))
         val content = root.at("choices", "0", "message", "content").asStr()
             ?: throw LlmException("返回里没有 choices[0].message.content", "确认模型名是否可用、该接口是否兼容 OpenAI 格式")
         return content to (root.at("usage", "total_tokens").asInt() ?: 0)
@@ -154,7 +180,7 @@ class LlmClient(
      * 既不碰候选列表的解析，也不会像「重新识别」那样把另外两条一起换掉。
      */
     fun rewrite(text: String, instruction: String): Pair<String, Int> {
-        if (cfg.apiKey.isBlank()) throw LlmException("还没填 API Key", "到「设置」里填地址和 Key")
+        requireReady()
         val (content, tokens) = complete(REWRITE_SYSTEM, "原回复：$text\n要求：$instruction")
         val one = sanitizeOneLine(content)
         if (one.isBlank()) throw LlmException("模型没给出改写结果", "换个预设再试一次")
@@ -235,9 +261,8 @@ class LlmClient(
     }
 
     private fun endpoint(base: String): String {
-        val u = base.trim().trimEnd('/')
-        if (u.isEmpty()) throw LlmException("接口地址是空的", "示例：https://api.openai.com/v1")
-        return if (u.endsWith("/chat/completions")) u else "$u/chat/completions"
+        if (base.isBlank()) throw LlmException("接口地址是空的", "示例：https://api.openai.com/v1")
+        return chatCompletionsUrl(base)
     }
 
     /** 失败重试一次（只对超时/5xx/429 这种「可能只是碰巧」的错误）。 */
@@ -273,7 +298,7 @@ class LlmClient(
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             conn.setRequestProperty("Accept", "application/json")
-            conn.setRequestProperty("Authorization", "Bearer ${cfg.apiKey}")
+            conn.setRequestProperty("Authorization", authHeader())
             conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
 
             val code = conn.responseCode
@@ -304,6 +329,17 @@ private const val JSON_NUDGE = """【补正】你上一次的输出不是合法 
 
 这次请严格只输出那一个 JSON 对象：不要解释、不要 markdown 代码块、不要在 JSON 前后加任何文字，
 也不要把字段值写太长以免再次被截断。"""
+
+/**
+ * 把「接口地址」拼成 chat/completions 的完整 URL。
+ *
+ * 抽成顶层纯函数是为了让**本地代理**用同一份拼法 —— 以前这段逻辑只在 LlmClient 里，
+ * 代理另写一份的话，两边对「地址该不该带 /v1」的处理迟早会不一致。
+ */
+internal fun chatCompletionsUrl(base: String): String {
+    val u = base.trim().trimEnd('/')
+    return if (u.endsWith("/chat/completions")) u else "$u/chat/completions"
+}
 
 /**
  * 「单条改写」的三个预设：左边是按钮文字，右边那句原样发给模型。

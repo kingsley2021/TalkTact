@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 本地代理要常驻监听回环端口，所以是个前台服务（类型 specialUse，见下面的 service 声明） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 前台服务的常驻通知（13+ 才有这个权限；用户不给也能跑，只是通知不显示） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
       心跳：模块在微信进程里跑起来后会广播一次，App 收到才认定「微信内已生效」。
@@ -39,6 +44,20 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          本地代理：把「API Key 只留在 App 进程」这件事做成一条回环通道。
+          exported=false：只有本机同 UID 或显式 startService 能拉起它；
+          真正的门在代理服务器的 token 校验上（回环端口不等于「只有微信能连」）。
+        -->
+        <service
+            android:name=".proxy.ProxyService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="localLoopbackApiProxy" />
+        </service>
 
         <receiver android:name=".HeartbeatReceiver" android:exported="true">
             <intent-filter>
