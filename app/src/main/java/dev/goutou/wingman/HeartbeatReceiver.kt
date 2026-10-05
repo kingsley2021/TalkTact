@@ -29,6 +29,8 @@ object Heartbeat {
         learned: String? = null,
         call: String? = null,
         roles: String? = null,
+        /** 这次调用实际走的路线（proxy / direct），回传给 App 显示 */
+        route: String? = null,
     ) {
         try {
             val intent = Intent(ACTION).setPackage(MODULE_PKG).putExtra("tokens", tokens)
@@ -36,6 +38,7 @@ object Heartbeat {
             if (learned != null) intent.putExtra("learned", learned)
             if (call != null) intent.putExtra("call", call)
             if (roles != null) intent.putExtra("roles", roles)
+            if (route != null) intent.putExtra("route", route)
             context.sendBroadcast(intent, PERMISSION)
         } catch (t: Throwable) {
             // 广播失败不影响主流程
@@ -64,6 +67,11 @@ class HeartbeatReceiver : BroadcastReceiver() {
         intent.getStringExtra("call")?.let {
             editor.putString(Keys.LAST_CALL, it)
             editor.putLong(Keys.LAST_CALL_AT, System.currentTimeMillis())
+        }
+        // 这次实际走的路线：排查「明明开了本地代理，微信侧却还在直连」靠它
+        intent.getStringExtra("route")?.let {
+            editor.putString(Keys.ROUTE, it)
+            editor.putLong(Keys.ROUTE_AT, System.currentTimeMillis())
         }
         // 「角色」的聊天记录：注入侧每轮把新读到的消息回传，这里按 1 小时窗口查重后合并
         intent.getStringExtra("roles")?.let { payload ->

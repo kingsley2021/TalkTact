@@ -46,16 +46,19 @@ class LlmClient(
      * 手上只有一个随机 token，Key 在 App 进程那边 —— 这就是「Key 不出 App」的做法。
      */
     private fun outboundUrl(): String =
-        if (cfg.proxyEnabled && cfg.proxyToken.isNotBlank()) ProxyProtocol.urlFor(cfg.proxyPort)
-        else endpoint(cfg.baseUrl)
+        if (viaProxy()) ProxyProtocol.urlFor(cfg.proxyPort) else endpoint(cfg.baseUrl)
+
+    /** 走不走本地代理。和回传给 App 显示的是同一份判断（ProxyProtocol.routeOf）。 */
+    private fun viaProxy(): Boolean =
+        ProxyProtocol.routeOf(cfg.proxyEnabled, cfg.proxyToken) == ProxyProtocol.ROUTE_PROXY
 
     /** 出站凭据：代理模式给 token（App 会用真 Key 去调服务商），否则就是 API Key 本身。 */
     private fun authHeader(): String =
-        "Bearer " + if (cfg.proxyEnabled) cfg.proxyToken else cfg.apiKey
+        "Bearer " + if (viaProxy()) cfg.proxyToken else cfg.apiKey
 
     /** 发起前的前置检查。代理模式下**不看 Key** —— 它本来就该是空的（App 根本没推过来）。 */
     private fun requireReady() {
-        if (cfg.proxyEnabled) {
+        if (viaProxy()) {
             if (cfg.proxyToken.isBlank()) {
                 throw LlmException("本地代理的 token 是空的", "到 App 的「高级设置 → 本地代理」里关一下再开")
             }

@@ -9,6 +9,17 @@ package dev.goutou.wingman.proxy
 object ProxyProtocol {
 
     const val PORT_DEFAULT = 8799
+    const val ROUTE_PROXY = "proxy"
+    const val ROUTE_DIRECT = "direct"
+
+    /**
+     * 这次调用实际走哪条路。
+     *
+     * 两侧共用这一份判断：注入侧用它决定怎么发，回传给 App 显示的也是它 ——
+     * 不然「界面说走了代理、其实走了直连」这种问题永远查不出来。
+     */
+    fun routeOf(proxyEnabled: Boolean, proxyToken: String): String =
+        if (proxyEnabled && proxyToken.isNotBlank()) ROUTE_PROXY else ROUTE_DIRECT
     const val PATH_CHAT = "/proxy/chat/completions"
     const val PATH_HEALTH = "/proxy/health"
 

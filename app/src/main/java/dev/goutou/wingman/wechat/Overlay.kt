@@ -28,6 +28,7 @@ import dev.goutou.wingman.llm.LlmException
 import dev.goutou.wingman.llm.Graded
 import dev.goutou.wingman.llm.gradedWaitMs
 import dev.goutou.wingman.llm.isReplyTooLong
+import dev.goutou.wingman.proxy.ProxyProtocol
 import dev.goutou.wingman.llm.REWRITE_PRESETS
 import dev.goutou.wingman.llm.Reply
 import dev.goutou.wingman.llm.Suggestion
@@ -741,7 +742,13 @@ internal class Panel(private val a: Activity) {
             }
             val trace = traces.joinToString("\n\n")
             // 顺带回传「这次实际发出去的那一份」，App 首页可以对着核对 skill 有没有真的生效
-            Heartbeat.send(a, tokens, call = trace.takeIf { it.isNotBlank() })
+            Heartbeat.send(
+                a,
+                tokens,
+                call = trace.takeIf { it.isNotBlank() },
+                // 这次实际走哪条路：App 的「本地代理」卡片会显示，用来确认代理到底有没有被用上
+                route = ProxyProtocol.routeOf(cfg.proxyEnabled, cfg.proxyToken),
+            )
             val ok = suggestion
             val err = error
             handler.post {

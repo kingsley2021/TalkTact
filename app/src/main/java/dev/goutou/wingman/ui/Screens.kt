@@ -1308,6 +1308,26 @@ fun AdvancedScreen(
                     fontSize = 11.sp,
                     color = if (ProxyState.running) palette.ok else palette.bad,
                 )
+                val (lastRoute, lastRouteAt) = store.lastRoute()
+                if (lastRoute.isNotBlank() && lastRouteAt > 0L) {
+                    val ok = lastRoute == ProxyProtocol.ROUTE_PROXY
+                    Text(
+                        "微信侧最近一次走的是：" + (if (ok) "本地代理 ✅" else "直连（代理还没被用上）") +
+                            " · " + java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+                                .format(java.util.Date(lastRouteAt)),
+                        fontSize = 11.sp,
+                        color = if (ok) palette.ok else palette.warn,
+                    )
+                } else {
+                    Text("微信侧还没回传过路线 —— 到微信里点一次「↻ 重新识别」就会有了", fontSize = 11.sp, color = palette.sub)
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "提示：识别结果**有缓存**（同一条消息不会重复调接口）。开了代理之后，" +
+                        "要对**新消息**点一次「↻ 重新识别」才会真正走代理。",
+                    fontSize = 11.sp,
+                    color = palette.sub,
+                )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = d.proxyPort.toString(),

@@ -75,6 +75,9 @@ object Keys {
     const val PROXY_ON = "proxy_on"
     const val PROXY_PORT = "proxy_port"
     const val PROXY_TOKEN = "proxy_token"
+    /** 注入侧回传：最近一次实际走的是 proxy 还是 direct（排查「代理没被用上」用） */
+    const val ROUTE = "last_route"
+    const val ROUTE_AT = "last_route_at"
     /** 只对白名单里的会话工作（默认关 = 全部会话都工作） */
     const val WHITELIST_ON = "whitelist_on"
     /** 白名单：会话名（归一化过的，见 Roles.normalizeKey） */
@@ -311,6 +314,10 @@ class ConfigStore(context: Context) {
         sp.edit().putString(Keys.PROXY_TOKEN, "").apply()
         return ensureProxyToken()
     }
+
+    /** 注入侧最近一次实际走的路线（proxy / direct；空 = 还没回传过）+ 时间戳。 */
+    fun lastRoute(): Pair<String, Long> =
+        sp.getString(Keys.ROUTE, "").orEmpty() to sp.getLong(Keys.ROUTE_AT, 0L)
 
     /** 自检测到的两路延迟（写回复 / 风险评估；0 = 没测过）。设置页的公告栏读它。 */
     fun probeMs(): Pair<Long, Long> =
