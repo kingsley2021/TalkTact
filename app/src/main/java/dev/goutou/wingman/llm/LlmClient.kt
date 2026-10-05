@@ -10,6 +10,22 @@ import java.net.URL
 data class LlmResult(val suggestion: Suggestion, val totalTokens: Int, val millis: Long, val model: String)
 
 /**
+ * 「接口自检」的结果：**只报连通性和延迟**，不含任何模型回复内容。
+ *
+ * 三段耗时分开量，好判断慢在哪一段：DNS 解析 / 裸 TCP 握手 / 一次完整往返。
+ */
+data class ProbeResult(
+    val host: String?,
+    val targetIp: String?,
+    val dnsMs: Long,
+    /** 裸 TCP 握手；null = 没测到（前置代理拦裸 TCP 很正常，不代表接口不通） */
+    val connectMs: Long?,
+    val totalMs: Long,
+    val model: String,
+    val totalTokens: Int,
+)
+
+/**
  * OpenAI 兼容接口客户端。
  *
  * 刻意用 HttpURLConnection 而不是 OkHttp：这段代码会被注入进微信进程，
@@ -108,30 +124,54 @@ class LlmClient(
         runCatching { cb(body) }
     }
 
-    /** 首页「接口自检」调它：真发一次最小请求，把延迟和用量报回来。 */
-    fun probe(): LlmResult {
-        if (cfg.apiKey.isBlank()) throw LlmException("还没填 API Key", "到「设置」里填地址和 Key")
-        val start = System.currentTimeMillis()
+
+    /**
+     * 「接口自检」用的一次最小请求 —— **只验连通性和延迟**。
+     *
+     * 和 [analyze] 的三点区别，都是刻意的：
+     *
+     * ① 请求最小：**只有一句 `user: "ping"`**，既不拼当前 skill 也不拼角色档案 ——
+     *    自检不该受它们影响（它跟「你配了哪套提示词」一点关系都没有）；
+     * ② `max_tokens = 1`：只让服务端吐一个 token，尽量不花钱；
+     * ③ **不看模型回了什么**：HTTP 2xx 且返回是 JSON 就算通。
+     *
+     * 第 ③ 条是这次修的重点。以前这里拿模型回复去跑 `SuggestionParser.parse()`，
+     * 于是「模型话多了 / 被 max_tokens 截断 / 没按 JSON 契约回」都会被报成**接口不通** ——
+     * 那是模型听不听话的问题，不是连接的问题。想验模型是否按契约回复，去「试一试」页。
+     */
+    fun probe(): ProbeResult {
+        if (cfg.apiKey.isBlank()) throw LlmException("还没填 API Key", "到「设置 → 高级设置」里填地址和 Key")
+        val url = endpoint(cfg.baseUrl)
+        val host = NetInfo.hostOf(url)
+
+        // ① DNS 解析耗时（顺便拿到目标 IP）
+        val dnsStart = System.currentTimeMillis()
+        val targetIp = NetInfo.resolve(host)
+        val dnsMs = System.currentTimeMillis() - dnsStart
+
+        // ② 裸 TCP 握手：这才是「连接延迟」
+        val connectMs = NetInfo.tcpConnectMs(host, NetInfo.portOf(url))
+
+        // ③ 一次最小往返
         val payload = Json.encode(
             obj(
                 "model" to str(cfg.model),
-                "max_tokens" to num(48),
+                "max_tokens" to num(1),
                 "messages" to arr(
-                    listOf(
-                        obj("role" to str("system"), "content" to str("你是联通性测试。收到任何输入都只回复这一个 JSON：{\"intent\":\"ok\",\"risk\":\"低\",\"note\":\"自检\",\"replies\":[{\"style\":\"稳妥\",\"text\":\"联通正常\"}]}")),
-                        obj("role" to str("user"), "content" to str("ping")),
-                    ),
+                    listOf(obj("role" to str("user"), "content" to str("ping"))),
                 ),
             ),
         )
-        val root = parseResponse(post(endpoint(cfg.baseUrl), payload))
-        val content = root.at("choices", "0", "message", "content").asStr()
-            ?: throw LlmException("接口通了，但返回结构不是 OpenAI 格式", "中转站可能改了返回体")
-        return LlmResult(
-            suggestion = SuggestionParser.parse(content),
-            totalTokens = root.at("usage", "total_tokens").asInt() ?: 0,
-            millis = System.currentTimeMillis() - start,
+        val start = System.currentTimeMillis()
+        val root = parseResponse(post(url, payload))
+        return ProbeResult(
+            host = host,
+            targetIp = targetIp,
+            dnsMs = dnsMs,
+            connectMs = connectMs,
+            totalMs = System.currentTimeMillis() - start,
             model = root.at("model").asStr() ?: cfg.model,
+            totalTokens = root.at("usage", "total_tokens").asInt() ?: 0,
         )
     }
 

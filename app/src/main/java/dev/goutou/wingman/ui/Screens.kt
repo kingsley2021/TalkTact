@@ -49,6 +49,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -69,7 +70,10 @@ import dev.goutou.wingman.config.Backup
 import dev.goutou.wingman.config.ConfigStore
 import dev.goutou.wingman.config.Role
 import dev.goutou.wingman.llm.BUILT_IN_SKILLS
+import dev.goutou.wingman.llm.Geo
 import dev.goutou.wingman.llm.LlmClient
+import dev.goutou.wingman.llm.LlmException
+import dev.goutou.wingman.llm.NetInfo
 import dev.goutou.wingman.llm.RemoteSkill
 import dev.goutou.wingman.llm.Suggestion
 import dev.goutou.wingman.wechat.ChatMsg
@@ -92,6 +96,24 @@ private data class Check(val title: String, val desc: String, val level: Level, 
  * 以前这两个动作是纯文字（TextButton），看着像标题的一部分、点起来也没有「按钮」的反馈；
  * 现在统一给它们一个描边框 —— 一眼能看出是能点的东西。
  */
+/** 一行「标题 + 值」的网络信息。值取不到就显示 null —— 不编。 */
+@Composable
+private fun NetRow(label: String, value: String?, hint: String? = null) {
+    val palette = LocalPalette.current
+    val missing = value.isNullOrBlank()
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, fontSize = 12.sp, color = palette.sub, modifier = Modifier.width(76.dp))
+        Column(Modifier.weight(1f)) {
+            Text(value ?: "null", fontSize = 13.sp, color = if (missing) palette.warn else palette.text)
+            if (!hint.isNullOrBlank()) Text(hint, fontSize = 10.sp, color = palette.sub)
+        }
+    }
+}
+
+/** 把「IP · 省份 · 运营商」拼成一行；全空返回 null（UI 那边显示 null）。 */
+private fun joinInfo(vararg parts: String?): String? =
+    parts.filter { !it.isNullOrBlank() }.joinToString(" · ").ifBlank { null }
+
 @Composable
 private fun HeaderButton(text: String, onClick: () -> Unit) {
     val palette = LocalPalette.current
@@ -179,7 +201,8 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
     var cfg by remember { mutableStateOf(store.load()) }
     val usage = remember(tick) { store.usage() }
     val beat = remember(tick) { store.heartbeatAt() }
-    var probeResult by remember { mutableStateOf<String?>(null) }
+    var probeVerdict by remember { mutableStateOf<String?>(null) }
+    var probeDetail by remember { mutableStateOf<String?>(null) }
     var probeOk by remember { mutableStateOf(false) }
     var probing by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf(0) }
@@ -332,25 +355,69 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
         item {
             GlassCard(glass) {
                 Text("接口自检", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
-                Text("真发一次最小请求，验证地址、Key、模型名（会消耗几个 token）。", fontSize = 12.sp, color = palette.sub)
+                Text(
+                    "只看「连不连得上、要多久」：发一次最小请求（一句 ping、只让它回 1 个 token）。\n" +
+                        "不拼当前 skill、也不看模型回了什么 —— 模型没按 JSON 回复算不上连接问题，" +
+                        "那种情况去「试一试」页验证。",
+                    fontSize = 12.sp,
+                    color = palette.sub,
+                )
+
+                val baseUrl = cfg.baseUrl
+                val host = remember(baseUrl) { NetInfo.hostOf(baseUrl) }
+                // 内网 IP / 目标 IP：本地或 DNS 就能拿到，不依赖任何第三方
+                val localIp by produceState<String?>(null, tick) {
+                    value = withContext(Dispatchers.IO) { NetInfo.localIpv4() }
+                }
+                val targetIp by produceState<String?>(null, tick) {
+                    value = withContext(Dispatchers.IO) { NetInfo.resolve(host) }
+                }
+                // 归属地：要问第三方，拿不到就 null（缓存 10 分钟；点「开始自检」会强制重查）
+                val localGeo by produceState<Geo?>(null, tick) {
+                    value = withContext(Dispatchers.IO) { NetInfo.geo() }
+                }
+                val targetGeo by produceState<Geo?>(null, tick, targetIp) {
+                    value = withContext(Dispatchers.IO) { targetIp?.let { NetInfo.geo(ip = it) } }
+                }
+
+                Spacer(Modifier.height(10.dp))
+                NetRow("本机内网", localIp)
+                NetRow("本机公网", joinInfo(localGeo?.ip, localGeo?.province ?: localGeo?.country, localGeo?.isp))
+                NetRow("目标服务器", joinInfo(targetIp, targetGeo?.province ?: targetGeo?.country), host)
+                Spacer(Modifier.height(4.dp))
+                Text("省份来自第三方 IP 库，仅供参考；取不到就显示 null。", fontSize = 10.sp, color = palette.sub)
+
                 Spacer(Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Button(
                         onClick = {
                             probing = true
-                            probeResult = null
+                            probeVerdict = null
+                            probeDetail = null
                             val conf = store.load()
                             scope.launch {
-                                val text = try {
-                                    val result = withContext(Dispatchers.IO) { LlmClient(conf).probe() }
-                                    if (result.totalTokens > 0) store.addUsage(result.totalTokens)
-                                    tick++
-                                    "通 · ${result.millis}ms · 模型 ${result.model} · ${result.totalTokens} token"
+                                var verdict: String
+                                var detail: String? = null
+                                try {
+                                    val r = withContext(Dispatchers.IO) { LlmClient(conf).probe() }
+                                    if (r.totalTokens > 0) store.addUsage(r.totalTokens)
+                                    probeOk = true
+                                    verdict = "通 · 往返 ${r.totalMs}ms · 模型 ${r.model} · ${r.totalTokens} token"
+                                    detail = buildString {
+                                        append("连接 ").append(r.connectMs?.let { "${it}ms" } ?: "未测得")
+                                        append(" · DNS ${r.dnsMs}ms")
+                                        r.targetIp?.let { append(" · 目标 ").append(it) }
+                                    }
                                 } catch (t: Throwable) {
-                                    "失败：${t.message}"
+                                    probeOk = false
+                                    verdict = "失败：${t.message}"
+                                    detail = (t as? LlmException)?.hint
                                 }
-                                probeResult = text
-                                probeOk = text.startsWith("通")
+                                // 让归属地跟着这次自检重新查一遍
+                                NetInfo.clearGeoCache()
+                                tick++
+                                probeVerdict = verdict
+                                probeDetail = detail
                                 probing = false
                             }
                         },
@@ -360,10 +427,14 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                     ) { Text(if (probing) "测试中…" else "开始自检") }
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        probeResult ?: "",
+                        probeVerdict ?: "",
                         fontSize = 12.sp,
                         color = if (probeOk) palette.ok else palette.bad,
                     )
+                }
+                probeDetail?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text(it, fontSize = 11.sp, color = palette.sub)
                 }
             }
         }
