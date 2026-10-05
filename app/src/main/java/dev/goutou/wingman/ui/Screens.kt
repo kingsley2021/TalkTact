@@ -1364,6 +1364,14 @@ fun AdvancedScreen(
                     fontSize = 11.sp,
                     color = palette.warn,
                 )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "如果状态行显示「服务在跑」但过一会儿就没了：这个应用需要常驻，请把它加入系统的" +
+                        "「电池优化白名单 / 允许后台运行」（各家名字不同：华为「应用启动管理」、小米「省电策略·无限制」、" +
+                        "OPPO / vivo 类似）。",
+                    fontSize = 11.sp,
+                    color = palette.sub,
+                )
             }
             proxyNote?.let {
                 Spacer(Modifier.height(6.dp))
