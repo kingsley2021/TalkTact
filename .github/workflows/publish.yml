@@ -71,11 +71,16 @@ jobs:
             APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
           fi
           echo "apksigner：$APKSIGNER"
+          "$APKSIGNER" version
 
-          "$APKSIGNER" verify --print-certs "$APK" | grep -E '^Signer #1 certificate (DN|SHA-256)' || true
-          GOT=$("$APKSIGNER" verify --print-certs "$APK" \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 \
-            | tr -d ':' | tr 'a-z' 'A-Z')
+          # 注意：verify 成功时默认什么都不打印，--verbose/--print-certs 才有内容
+          OUT=$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1) || {
+            echo "$OUT"
+            echo "::error::APK 验签失败（签名无效）"
+            exit 1
+          }
+          echo "$OUT"
+          GOT=$(printf '%s\n' "$OUT" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr -d ':' | tr 'a-z' 'A-Z')
           echo "证书 SHA-256（无分隔）：$GOT"
 
           # 发布证书的指纹（公开信息，硬编码在这里当断言用）
