@@ -1205,12 +1205,14 @@ fun AdvancedScreen(
         }
     }
     val cands = pulled.first
+    val reqAt = store.chatRequestAt()
+    // 拿「我什么时候点的」和「微信侧什么时候回的」比 —— 这两件事分开显示，
+    // 才能一眼看出是「请求没送到」还是「送到了但没读出名字」（排查方向完全相反）
     val pullInfo = pulled.second.let { (info, at) ->
-        if (at <= 0L) {
-            "还没拉过"
-        } else {
-            info.ifBlank { "已收到回传" } + " · " +
-                java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(at))
+        when {
+            at > reqAt -> info.ifBlank { "已收到回传" } + " · " + clockText(at)
+            reqAt > 0L -> "已请求 ${clockText(reqAt)} · 微信侧还没回过话"
+            else -> "还没拉过"
         }
     }
     var newChat by remember { mutableStateOf("") }
@@ -1724,8 +1726,12 @@ fun AdvancedScreen(
             if (todo.isEmpty()) {
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (cands.isEmpty()) "还没收到候选 —— 点上面的按钮，然后去微信首页停两秒。"
-                    else "候选（${cands.size} 个）都已经加进去了。",
+                    if (cands.isEmpty()) {
+                        if (reqAt > 0L) "还没收到候选 —— 看完左边那行字再决定下一步（把它的内容发我）。"
+                        else "还没收到候选 —— 点上面的按钮，然后去微信首页 / 通讯录停两秒。"
+                    } else {
+                        "候选（${cands.size} 个）都已经加进去了。"
+                    },
                     fontSize = 11.sp,
                     color = palette.sub,
                 )
@@ -2598,3 +2604,7 @@ fun NoticeBanner(title: String, lines: List<String>) {
         }
     }
 }
+
+/** 时间戳 -> 本地 HH:mm（只用在「上次拉取于 …」这种一句话里）。 */
+private fun clockText(at: Long): String =
+    java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(at))

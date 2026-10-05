@@ -330,6 +330,10 @@ class ConfigStore(context: Context) {
         return now
     }
 
+    /** 上一次点「拉取会话列表」的时间（0 = 没点过）。界面拿它和回传时间比，
+     *  就能分清「请求还没送到微信侧」和「送到了但没读出名字」——这两件事的排查方向是相反的。 */
+    fun chatRequestAt(): Long = sp.getLong(Keys.CHAT_REQ, 0L)
+
     /** 注入侧回传的会话名候选（归一化过、已去重；上限 300）。 */
     fun chatCandidates(): Set<String> = sp.getStringSet(Keys.CHAT_CANDIDATES, emptySet()).orEmpty()
 

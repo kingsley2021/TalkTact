@@ -289,22 +289,38 @@ internal class ViewReader(private val a: Activity) {
             val loc = IntArray(2)
             v.getLocationOnScreen(loc)
             if (loc[1] + h <= 0 || loc[1] >= height) return@walk
-            // 会话列表占大半个屏幕；太矮的多半是底部 tab 栏或某个折叠区
-            if (h < height * 0.35f) return@walk
+            // 会话列表占小半个屏幕以上；太矮的多半是底部 tab 栏或某个折叠区
+            if (h < height * 0.25f) return@walk
             lists.add(v)
         }
-        val chosen = lists.maxByOrNull { it.width.toLong() * it.height }
-            ?: return emptyList<String>() to "没找到像「会话列表」的容器（候选=${lists.size}）"
+        if (lists.isEmpty()) return emptyList<String>() to "没找到像「会话列表」的容器"
 
         val names = LinkedHashSet<String>()
         var rows = 0
-        for (i in 0 until chosen.childCount) {
-            val row = chosen.getChildAt(i) ?: continue
-            if (!row.isShown) continue
-            rows++
-            pickRowName(rowCandidates(row))?.let { names.add(it) }
+        // 取**并集**而不是「面积最大的那个」：微信经常是外层 RecyclerView 套内层，
+        // 只挑最大的会挑到外层，那一屏就只剩一行（里面还套着列表），读出 0 个名字。
+        for (list in lists) {
+            for (i in 0 until list.childCount) {
+                val row = list.getChildAt(i) ?: continue
+                if (!row.isShown) continue
+                // 这一格里还套着一个列表 → 它是容器、不是一行，跳过（外层包内层就是这个形状）
+                if (holdsList(row)) continue
+                rows++
+                pickRowName(rowCandidates(row))?.let { names.add(it) }
+            }
         }
-        return names.toList() to "列表=${describe(chosen)}｜行=$rows｜认出名字=${names.size}"
+        return names.toList() to "容器=${lists.size}｜行=$rows｜认出名字=${names.size}"
+    }
+
+    /** row 里面还套着另一个「像列表」的容器吗（外层 RecyclerView 包内层的典型形状）。 */
+    private fun holdsList(row: View): Boolean {
+        if (row !is ViewGroup) return false
+        var found = false
+        walk(row) { v ->
+            if (found || v === row || v !is ViewGroup) return@walk
+            if (v.childCount >= 3 && looksLikeList(v)) found = true
+        }
+        return found
     }
 
     /** 把一行里所有带文字的子视图收成候选，交给纯函数 [pickRowName] 挑。 */

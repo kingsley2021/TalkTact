@@ -127,6 +127,8 @@ internal class Panel(private val a: Activity) {
     /** 上一次读会话列表的时间 / 已处理到哪个请求 / 上次回传过的那一批（免得每 2.6 秒重发）。 */
     private var lastConvPullAt = 0L
     private var lastConvReq = 0L
+    /** 已经回过「收到了」的那个请求（回执只发一次，别每 900ms 刷一条）。 */
+    private var convReqAck = 0L
     private var lastConvNames = ""
     private val sentMsgs = HashSet<String>()
     private var lastAttachTry = 0L
@@ -305,6 +307,11 @@ internal class Panel(private val a: Activity) {
             return
         }
 
+        // App 里点了「拉取会话列表」→ 处理（回执 + 读名字）。
+        // 位置和上面「手动抓取」一个道理：**排在 hasWindowFocus 之前**。读一屏列表不需要窗口焦点，
+        // 而后面的早退分支一个比一个苛刻 —— 挡在哪儿都会让请求石沉大海，用户那边只看到「没反应」。
+        maybePullConversations(decor)
+
         if (!decor.hasWindowFocus()) return
 
         val cachedInput = inputRef
@@ -324,8 +331,6 @@ internal class Panel(private val a: Activity) {
                         "（判定要求 宽>${dp(50)}、位于屏幕下 70%、isShown）",
                 )
             }
-            // 「不是聊天页」的那一屏 —— 顺便把看得见的会话名收回去（只在这儿试，聊天页会读到消息）
-            maybePullConversations(decor)
             hideAll()
             return
         }
@@ -496,10 +501,12 @@ internal class Panel(private val a: Activity) {
     }
 
     /**
-     * 「不是聊天页」的那一屏（微信首页 / 通讯录）：把看得见的会话名回传回去。
+     * 会话名：读「当前这一屏看得见的」回传给 App（白名单页的候选）。
      *
-     * 只在两种时候做：白名单开着（要用它），或者 App 里刚点过「拉取会话列表」（明确授权）。
-     * 手动点的那次无论认出几个都要回一句（哪怕是零）—— 否则用户分不清是「没生效」还是「还没拉到」。
+     * 两种触发：白名单开着（要用它，随 tick 限流地做），或 App 里刚点过「拉取会话列表」。
+     *
+     * **每一步都要回话**：收到请求先回执、读之前先说在读哪一屏、读不出说为什么、抛异常也回一句。
+     * 因为「请求没送到」和「送到了但没读出名字」的排查方向完全相反，不给回执就只能瞎猜。
      */
     private fun maybePullConversations(decor: View) {
         val c = config
@@ -509,22 +516,46 @@ internal class Panel(private val a: Activity) {
         val now = System.currentTimeMillis()
         // 这一屏每 2.6 秒 tick 一次，没必要次次把整棵视图树读一遍
         if (!fresh && now - lastConvPullAt < CONV_PULL_MIN_MS) return
+        // 判「是不是聊天页」要读一遍视图树，所以放在两个早退**之后**：聊天页读到的是消息正文，不是会话名
+        val onChatPage = reader.findChatInput(decor) != null
+        if (fresh && req > convReqAck) {
+            convReqAck = req
+            // 把「当时在哪一屏」也带上（LauncherUI / ChattingUI…）：微信一改版本，
+            // 光靠猜永远猜不到，这一句顶一次来回。
+            val where = "页面=${a.javaClass.simpleName}"
+            Heartbeat.send(
+                a, 0,
+                chatsInfo = where + "｜" + if (onChatPage) {
+                    "你在聊天页 —— 切到「微信」或「通讯录」的列表再停两秒，我会自动读"
+                } else {
+                    "正在读这一屏…"
+                },
+            )
+        }
+        // 聊天页读到的是消息正文，不是会话名。这一屏跳过，**请求留着**（不消费），
+        // 等切到列表页再读 —— 消费掉的话，用户切过去就什么都不会发生了。
+        if (onChatPage) return
         lastConvPullAt = now
         if (fresh) lastConvReq = req
         try {
             val (names, info) = reader.conversationNames(decor)
+            val tagged = "页面=${a.javaClass.simpleName}｜$info"
             if (fresh) {
-                Heartbeat.send(a, 0, chats = names.joinToString("\n"), chatsInfo = info)
+                Heartbeat.send(a, 0, chats = names.joinToString("\n"), chatsInfo = tagged)
                 return
             }
             val joined = names.joinToString("\n")
             // 名字没变就不重复发（用户滚动列表时才会变）
             if (names.isNotEmpty() && joined != lastConvNames) {
                 lastConvNames = joined
-                Heartbeat.send(a, 0, chats = joined, chatsInfo = info)
+                Heartbeat.send(a, 0, chats = joined, chatsInfo = tagged)
             }
         } catch (t: Throwable) {
             XposedApi.log("读会话列表失败: $t")
+            // 出错也要回话，否则 App 那边看起来就是「请求石沉大海」
+            if (fresh) {
+                Heartbeat.send(a, 0, chats = "", chatsInfo = "读这一屏出错了（页面=${a.javaClass.simpleName}）：$t")
+            }
         }
     }
 
