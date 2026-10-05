@@ -190,9 +190,10 @@ data class ConfigData(
             this
         } else {
             copy(
-                baseUrl = baseUrl2.ifBlank { baseUrl },
-                apiKey = apiKey2.ifBlank { apiKey },
-                model = model2.ifBlank { model },
+                // 都 trim 一道：多一个空格/换行在有些中转上会变成 400（比如 model 名对不上）
+                baseUrl = baseUrl2.trim().ifBlank { baseUrl },
+                apiKey = apiKey2.trim().ifBlank { apiKey },
+                model = model2.trim().ifBlank { model },
             )
         }
 

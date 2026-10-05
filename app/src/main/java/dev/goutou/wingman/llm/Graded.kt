@@ -91,7 +91,7 @@ object Graded {
                 riskSug = r.suggestion
                 riskTokens = r.totalTokens
             } catch (t: Throwable) {
-                riskErr = t.message ?: t.javaClass.simpleName
+                riskErr = describe(t)
             }
         }
         riskThread.start()
@@ -101,13 +101,39 @@ object Graded {
             replySug = r.suggestion
             replyTokens = r.totalTokens
         } catch (t: Throwable) {
-            replyErr = t.message ?: t.javaClass.simpleName
+            replyErr = describe(t)
         }
 
         // 等风险那一路（它可能用的是另一套接口，慢一点很正常）：按自检测出的延迟给上限，超时按失败算。
         // 注意这里是「一起出结果」而不是「谁先回来先显」—— 快的那一路等慢的，卡片不会闪两次。
         runCatching { riskThread.join(waitMs) }
         if (riskThread.isAlive && riskErr == null) riskErr = "风险那一路等太久了（超过 ${waitMs / 1000} 秒）"
+
+        // 刚好一路成、一路挂 → 错开一下，把挂掉的那一路**单独再试一次**。
+        // 很多中转站按 key 限并发，两条腿同时打过去会有一路被拒（常见就是 400/409）；
+        // 这时另一条腿已经结束，单独重试不会再撞。只在失败时才多花一次调用。
+        if ((riskSug == null) != (replySug == null)) {
+            runCatching { Thread.sleep(700) }
+            if (riskSug == null) {
+                try {
+                    val r = riskClient.analyzeWith(gradedRiskPrompt(skillPrompt), msgs, roleContext)
+                    riskSug = r.suggestion
+                    riskTokens += r.totalTokens
+                    riskErr = null
+                } catch (t: Throwable) {
+                    riskErr = describe(t)
+                }
+            } else {
+                try {
+                    val r = replyClient.analyzeWith(gradedReplyPrompt(skillPrompt), msgs, roleContext)
+                    replySug = r.suggestion
+                    replyTokens += r.totalTokens
+                    replyErr = null
+                } catch (t: Throwable) {
+                    replyErr = describe(t)
+                }
+            }
+        }
 
         return GradedOutcome(
             suggestion = mergeGraded(riskSug, replySug, riskErr, replyErr),
@@ -117,4 +143,19 @@ object Graded {
             millis = System.currentTimeMillis() - start,
         )
     }
+}
+
+
+/**
+ * 把一次失败讲成一句人话：**连上游给的原文一起带上**。
+ *
+ * 之前这里只取 `t.message`，于是「HTTP 400」这种最需要上下文的错误，卡片上就只剩四个字：
+ * 上游明明在 error.message 里写了为什么（模型名不对 / 不支持这个参数 / 并发超限），全被丢掉了。
+ */
+internal fun describe(t: Throwable): String = when (t) {
+    is LlmException -> buildString {
+        append(t.message ?: "失败")
+        t.hint?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
+    }
+    else -> t.message ?: t.javaClass.simpleName
 }
