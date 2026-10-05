@@ -70,6 +70,10 @@ class LlmClient(
         val fields = LinkedHashMap<String, JsonValue>()
         fields["model"] = str(cfg.model)
         fields["temperature"] = num(cfg.temperature)
+        // 严格 JSON 输出：让服务端保证返回是合法 JSON。
+        // 只加在「生成候选」这条路上 —— 改写和风格提炼走 complete()，它们本来就要纯文本，
+        // 给它们带 json_object 反而会把返回变成 JSON 字符串。
+        if (cfg.jsonMode) fields["response_format"] = obj("type" to str("json_object"))
         // 0 = 无限制：干脆不传这个参数，交给服务端默认
         if (cfg.maxTokens > 0) fields["max_tokens"] = num(cfg.maxTokens)
         fields["messages"] = arr(

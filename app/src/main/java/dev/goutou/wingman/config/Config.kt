@@ -66,6 +66,8 @@ object Keys {
     const val MODEL2 = "model_2"
     /** 玻璃效果档位：auto / high / low（见 ui/GlassQuality.kt） */
     const val GLASS_QUALITY = "glass_quality"
+    /** 严格 JSON 输出：请求里带 response_format=json_object（只作用于「生成候选」） */
+    const val JSON_MODE = "json_mode"
 }
 
 /** 默认几点跑。 */
@@ -133,6 +135,11 @@ data class ConfigData(
      * 判定见 ui/GlassQuality.kt —— 手动选择永远优先于自动判断。
      */
     val glassQuality: String = GLASS_QUALITY_AUTO,
+    /**
+     * 严格 JSON 输出（`response_format: json_object`）。
+     * 默认关：有些中转站不认这个参数，开了会直接报错。开关只作用于「生成候选」那一条调用路径。
+     */
+    val jsonMode: Boolean = false,
 ) {
     /**
      * 分级模式下「风险评估」那一路要用的接口。
@@ -185,6 +192,7 @@ data class ConfigData(
             apiKey2 = p.getString(Keys.KEY2, "").orEmpty(),
             model2 = p.getString(Keys.MODEL2, "").orEmpty(),
             glassQuality = p.getString(Keys.GLASS_QUALITY, GLASS_QUALITY_AUTO).orEmpty().ifBlank { GLASS_QUALITY_AUTO },
+            jsonMode = p.getBoolean(Keys.JSON_MODE, false),
         )
 
     }
@@ -234,6 +242,7 @@ class ConfigStore(context: Context) {
             .putString(Keys.KEY2, d.apiKey2.trim())
             .putString(Keys.MODEL2, d.model2.trim())
             .putString(Keys.GLASS_QUALITY, d.glassQuality)
+            .putBoolean(Keys.JSON_MODE, d.jsonMode)
             .apply()
     }
 

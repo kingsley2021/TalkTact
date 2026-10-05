@@ -1132,6 +1132,20 @@ fun AdvancedScreen(
                 singleLine = true,
             )
             Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("严格 JSON 输出", fontSize = 15.sp, color = palette.text)
+                    Text(
+                        "请求里带 response_format=json_object，让服务端保证回的是合法 JSON，" +
+                            "能少一些「模型没返回 JSON」。有些中转不支持 —— 开了报错就关掉。" +
+                            "只影响生成候选，不影响单条改写和风格提炼。",
+                        fontSize = 11.sp,
+                        color = palette.sub,
+                    )
+                }
+                Switch(checked = d.jsonMode, onCheckedChange = { update(d.copy(jsonMode = it)) })
+            }
+            Spacer(Modifier.height(12.dp))
             Text("单次回复的 token 上限", fontSize = 12.sp, color = palette.sub)
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

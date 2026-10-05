@@ -40,7 +40,7 @@ import java.io.FileOutputStream
  * 所以这些图是「没有玻璃特效的骨架图」—— 对回归来说够用。
  */
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [34])
+@Config(sdk = [34], qualifiers = "w411dp-h891dp-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ScreenRenderTest {
 
