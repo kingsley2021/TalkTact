@@ -548,12 +548,33 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
             GlassCard(glassAlpha) {
                 Text("意图：${s.intent}", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = palette.text)
                 Text("风险：${s.risk}　${s.note}", fontSize = 13.sp, color = palette.sub)
+                Text("AI 生成 · 发送前请自行判断", fontSize = 11.sp, color = palette.sub)
             }
-            s.replies.forEach { reply ->
-                GlassCard(glassAlpha) {
+            if (s.partial) {
+                Text(
+                    "⚠ 模型输出被截断，这条是从残缺 JSON 里抢救出来的，建议重新生成",
+                    fontSize = 11.sp,
+                    color = palette.warn,
+                )
+            }
+            s.replies.forEachIndexed { index, reply ->
+                val starred = s.best == index
+                GlassCard(
+                    glassAlpha,
+                    border = if (starred) palette.primary.copy(alpha = 0.55f) else null,
+                ) {
                     Column(Modifier.fillMaxWidth().clickable { clipboard.setText(AnnotatedString(reply.text)) }) {
-                        Text(reply.style, color = palette.primary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(reply.style, color = palette.primary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            if (starred) {
+                                Spacer(Modifier.width(6.dp))
+                                Text("★ 最推荐", color = palette.primary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
                         Text(reply.text, fontSize = 15.sp, color = palette.text)
+                        if (starred && s.why.isNotBlank()) {
+                            Text(s.why, fontSize = 12.sp, color = palette.sub)
+                        }
                         Text("点击复制", fontSize = 11.sp, color = palette.sub)
                     }
                 }

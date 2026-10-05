@@ -731,8 +731,9 @@ internal class Panel(private val a: Activity) {
         if (s.note.isNotBlank()) {
             bodyBox.addView(label(s.note, 12f, colorSub) { setPadding(0, dp(4), 0, dp(2)) })
         }
-        for (r in s.replies) {
-            val view = label("${r.style}｜${r.text}", 14f, colorMain) {
+        s.replies.forEachIndexed { index, r ->
+            val starred = s.best == index
+            val view = label("${if (starred) "★ " else ""}${r.style}｜${r.text}", 14f, colorMain) {
                 background = roundRect(colorReply, 14)
                 setPadding(dp(12), dp(8), dp(12), dp(8))
             }
@@ -746,8 +747,21 @@ internal class Panel(private val a: Activity) {
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                     .apply { topMargin = dp(6) },
             )
+            if (starred && s.why.isNotBlank()) {
+                bodyBox.addView(label("★ 最推荐：${s.why}", 10f, colorSub) { setPadding(dp(12), dp(2), 0, 0) })
+            }
         }
-        bodyBox.addView(label("点一下填入输入框 · 长按复制 · 本模块不会自动发送", 10f, colorSub) { setPadding(0, dp(6), 0, 0) })
+        bodyBox.addView(
+            label(
+                buildString {
+                    append("点一下填入输入框 · 长按复制 · 本模块不会自动发送")
+                    append("\nAI 生成，发送前请自行判断")
+                    if (s.partial) append("\n⚠ 模型输出被截断，这份是抢救出来的，建议点「刷新」重来")
+                },
+                10f,
+                colorSub,
+            ) { setPadding(0, dp(6), 0, 0) },
+        )
         // 默认不打扰：只有你已经把卡片打开着，才把新结果摊在眼前；
         // 折叠着的时候只更新按钮上的「风险 + 条数」，点一下才展开。
         setChip("军师 · 风险${s.risk} · ${s.replies.size}条", chipColor(s.risk))

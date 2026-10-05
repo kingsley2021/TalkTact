@@ -50,9 +50,13 @@ class LlmClient(
         val start = System.currentTimeMillis()
         // 先落成两个局部变量：trace 要能原样看到「发出去的是什么」，不能只看 cfg
         val systemText = cfg.prompt
+        // 顺序刻意是「跨请求不变的东西在前、每次都变的东西在后」：
+        // system（skill）→ 角色档案 + 说话风格 → 聊天记录。
+        // 这样同一个联系人的前两次之后，前缀就一直一样，能吃到服务端的**前缀缓存**
+        // （OpenAI / DeepSeek 是按前缀自动命中的，命中价差一个数量级）。
         val userText = buildString {
+            if (!roleContext.isNullOrBlank()) append(roleContext).append("\n\n")
             append("聊天记录（时间顺序，最后一条是对方刚发的）：\n").append(msgs.asTranscript())
-            if (!roleContext.isNullOrBlank()) append("\n\n").append(roleContext)
             append("\n\n只输出系统要求的那个 JSON 对象，不要任何解释文字。")
         }
         val fields = LinkedHashMap<String, JsonValue>()
