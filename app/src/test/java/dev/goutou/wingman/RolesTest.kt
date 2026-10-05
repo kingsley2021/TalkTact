@@ -4,6 +4,8 @@ import dev.goutou.wingman.config.Role
 import dev.goutou.wingman.config.RoleMsg
 import dev.goutou.wingman.config.Roles
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -96,8 +98,53 @@ class RolesTest {
     fun `写档案时角色不存在就新建`() {
         val next = Roles.setProfile(emptyList(), "王五", "家人", "")
         assertEquals(1, next.size)
+        assertEquals("王五", next[0].key)
         assertEquals("王五", next[0].name)
         assertTrue(next[0].msgs.isEmpty())
+    }
+
+    @Test
+    fun `群名结尾的成员数会被归一化掉`() {
+        assertEquals("同事摸鱼群", Roles.normalizeKey("同事摸鱼群(9)"))
+        assertEquals("同事摸鱼群", Roles.normalizeKey(" 同事摸鱼群 (12) "))
+        assertEquals("例会", Roles.normalizeKey("例会"))
+        // 括号在中间的不动（那是名字的一部分）
+        assertEquals("群(9)公告", Roles.normalizeKey("群(9)公告"))
+    }
+
+    @Test
+    fun `改名只动显示名，消息照样记到同一条`() {
+        var roles = Roles.merge(emptyList(), listOf("张三" to RoleMsg(false, "你好", t0)))
+        roles = Roles.rename(roles, "张三", "老张")
+        assertEquals("老张", roles[0].name)
+        assertEquals("张三", roles[0].key)
+        assertTrue(roles[0].renamed)
+
+        // 之后还是用识别名上报消息 → 必须落回同一条
+        roles = Roles.merge(roles, listOf("张三" to RoleMsg(false, "在吗", t0 + min(30))))
+        assertEquals(1, roles.size)
+        assertEquals(2, roles[0].msgs.size)
+        assertEquals("老张", roles[0].name)
+    }
+
+    @Test
+    fun `旧数据没有 k 字段时用名字当 key`() {
+        val legacy = """[{"n":"张三","r":"同事","m":[{"me":false,"t":"你好","a":$t0}]}]"""
+        val roles = Roles.decode(legacy)
+        assertEquals(1, roles.size)
+        assertEquals("张三", roles[0].key)
+        assertEquals("张三", roles[0].name)
+        assertFalse(roles[0].renamed)
+    }
+
+    @Test
+    fun `手改的名字不会被同名的识别名顶掉`() {
+        var roles = Roles.merge(emptyList(), listOf("物业管家" to RoleMsg(false, "交费了", t0)))
+        roles = Roles.rename(roles, "物业管家", "小区物业")
+        roles = Roles.setProfile(roles, "物业管家", "服务方", "")
+        assertEquals("小区物业", roles[0].name)
+        assertEquals("服务方", roles[0].relation)
+        assertNotEquals(2, roles.size)
     }
 
     @Test

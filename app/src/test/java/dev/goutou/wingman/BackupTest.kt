@@ -54,7 +54,7 @@ class BackupTest {
 
     @Test
     fun `导入是合并角色不是替换`() {
-        val existing = listOf(Role("李四", "朋友", "", listOf()))
+        val existing = listOf(Role(key = "李四", name = "李四", relation = "朋友"))
         val text = Backup.export(sampleCfg(), sampleRoles(), includeApiKey = true)
         val r = Backup.import(text, ConfigData(), existing)!!
         assertEquals(2, r.roles.size)

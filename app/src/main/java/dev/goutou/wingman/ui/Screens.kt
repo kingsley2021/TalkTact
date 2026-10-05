@@ -916,13 +916,22 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
     var tick by remember { mutableStateOf(0) }
     val roles = remember(tick) { store.roles() }
     var pendingDelete by remember { mutableStateOf<String?>(null) }
-    val current = open?.let { name -> roles.firstOrNull { it.name == name } }
+    val current = open?.let { k -> roles.firstOrNull { it.key == k } }
 
     if (open != null && current != null) {
-        RoleDetail(store, current, glassAlpha) {
-            onOpen(null)
-            tick++
-        }
+        RoleDetail(
+            store = store,
+            role = current,
+            glassAlpha = glassAlpha,
+            onBack = {
+                onOpen(null)
+                tick++
+            },
+            onRename = { newName ->
+                store.renameRole(current.key, newName)
+                tick++
+            },
+        )
         return
     }
 
@@ -937,7 +946,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                 "模块会在你打开某个聊天页时，把读到的消息按联系人归档到这里（1 小时内重复的内容只留一条）。\n" +
                     "点进某个人，写上「TA 是你什么人」和「平时的关系」—— 这些会连同之前攒下的聊天记录一起，\n" +
                     "拼进提示词，直接影响「军师」生成出来的回复。\n" +
-                    "长按某一项可以直接删除它。",
+                    "长按某一项可以直接删除它；点进去可以改名字。",
                 fontSize = 12.sp,
                 color = palette.sub,
             )
@@ -959,12 +968,22 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
             GlassCard(glassAlpha, border = palette.primary.copy(alpha = if (role.relation.isBlank()) 0.15f else 0.5f)) {
                 Column(
                     Modifier.fillMaxWidth().combinedClickable(
-                        onClick = { onOpen(role.name) },
-                        onLongClick = { pendingDelete = role.name },
+                        onClick = { onOpen(role.key) },
+                        onLongClick = { pendingDelete = role.key },
                     ),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(role.name, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = palette.text, modifier = Modifier.weight(1f))
+                        Text(role.name, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = palette.text, modifier = Modifier.weight(1f, fill = false))
+                        if (role.renamed) {
+                            Text(
+                                " ◦ 识别名 ${role.key.take(10)}",
+                                fontSize = 10.sp,
+                                color = palette.warn,
+                                modifier = Modifier.weight(1f),
+                            )
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
                         Text("${role.msgs.size} 条", fontSize = 12.sp, color = palette.sub)
                     }
                     Text(
@@ -982,14 +1001,15 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
         }
     }
 
-    pendingDelete?.let { name ->
+    pendingDelete?.let { key ->
+        val shown = roles.firstOrNull { it.key == key }?.name ?: key
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("删除角色「$name」？") },
+            title = { Text("删除角色「$shown」？") },
             text = { Text("档案和记录一起删掉，无法恢复。") },
             confirmButton = {
                 TextButton(onClick = {
-                    store.removeRole(name)
+                    store.removeRole(key)
                     pendingDelete = null
                     tick++
                 }) { Text("删除") }
@@ -1001,20 +1021,36 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
 
 
 @Composable
-private fun RoleDetail(store: ConfigStore, role: Role, glassAlpha: Float, onBack: () -> Unit) {
+private fun RoleDetail(
+    store: ConfigStore,
+    role: Role,
+    glassAlpha: Float,
+    onBack: () -> Unit,
+    onRename: (String) -> Unit,
+) {
     val palette = LocalPalette.current
-    var relation by remember(role.name) { mutableStateOf(role.relation) }
-    var note by remember(role.name) { mutableStateOf(role.note) }
-    var saved by remember(role.name) { mutableStateOf(false) }
+    var relation by remember(role.key) { mutableStateOf(role.relation) }
+    var note by remember(role.key) { mutableStateOf(role.note) }
+    var saved by remember(role.key) { mutableStateOf(false) }
     var confirm by remember { mutableStateOf<String?>(null) }
+    var renameOpen by remember { mutableStateOf(false) }
+    var draft by remember(role.key) { mutableStateOf(role.name) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
         ScreenHeader(role.name, "档案 · ${role.msgs.size} 条记录") {
+            TextButton(onClick = { renameOpen = true }) { Text("改名字") }
             TextButton(onClick = onBack) { Text("返回") }
         }
 
         GlassCard(glassAlpha) {
             Text("TA 是你什么人", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            if (role.renamed) {
+                Text(
+                    "（识别到的会话名是「${role.key}」，它负责匹配、不会被改动，所以改了名字以后消息还是记到这一条）",
+                    fontSize = 11.sp,
+                    color = palette.sub,
+                )
+            }
             RELATIONS.chunked(4).forEach { row ->
                 Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     row.forEach { r ->
@@ -1042,7 +1078,7 @@ private fun RoleDetail(store: ConfigStore, role: Role, glassAlpha: Float, onBack
             Spacer(Modifier.height(10.dp))
             Button(
                 onClick = {
-                    store.setRoleProfile(role.name, relation, note)
+                    store.setRoleProfile(role.key, relation, note)
                     saved = true
                 },
                 modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -1093,6 +1129,38 @@ private fun RoleDetail(store: ConfigStore, role: Role, glassAlpha: Float, onBack
         }
     }
 
+    if (renameOpen) {
+        AlertDialog(
+            onDismissRequest = { renameOpen = false },
+            title = { Text("给这个角色改个名字") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("显示名字") },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "这里只改显示。识别到的会话名「${role.key}」不变 —— 所以改完名字，" +
+                            "以后这个会话的消息还是记到同一条上，不会分家。",
+                        fontSize = 11.sp,
+                        color = palette.sub,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRename(draft)
+                    renameOpen = false
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { renameOpen = false }) { Text("取消") } },
+        )
+    }
+
     confirm?.let { what ->
         AlertDialog(
             onDismissRequest = { confirm = null },
@@ -1105,7 +1173,7 @@ private fun RoleDetail(store: ConfigStore, role: Role, glassAlpha: Float, onBack
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (what == "clear") store.clearRoleMsgs(role.name) else store.removeRole(role.name)
+                    if (what == "clear") store.clearRoleMsgs(role.key) else store.removeRole(role.key)
                     confirm = null
                     onBack()
                 }) { Text("确定") }

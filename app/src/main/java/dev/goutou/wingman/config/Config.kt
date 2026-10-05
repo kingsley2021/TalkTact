@@ -198,18 +198,23 @@ class ConfigStore(context: Context) {
         saveRoles(Roles.merge(roles(), incoming))
     }
 
-    /** 写「TA 是你什么人 / 平时的关系」。 */
-    fun setRoleProfile(name: String, relation: String, note: String) {
-        saveRoles(Roles.setProfile(roles(), name, relation, note))
+    /** 写「TA 是你什么人 / 平时的关系」。参数是识别名（key）。 */
+    fun setRoleProfile(key: String, relation: String, note: String) {
+        saveRoles(Roles.setProfile(roles(), key, relation, note))
     }
 
-    fun removeRole(name: String) {
-        saveRoles(roles().filterNot { it.name == name })
+    /** 改显示名（不动 key，所以后续消息还是记到这一条）。 */
+    fun renameRole(key: String, newName: String) {
+        saveRoles(Roles.rename(roles(), key, newName))
+    }
+
+    fun removeRole(key: String) {
+        saveRoles(roles().filterNot { it.key == key })
     }
 
     /** 只清聊天记录，保留档案。 */
-    fun clearRoleMsgs(name: String) {
-        saveRoles(roles().map { if (it.name == name) it.copy(msgs = emptyList()) else it })
+    fun clearRoleMsgs(key: String) {
+        saveRoles(roles().map { if (it.key == key) it.copy(msgs = emptyList()) else it })
     }
 
     fun requestDiag(): Long {

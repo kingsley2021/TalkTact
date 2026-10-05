@@ -420,8 +420,19 @@ internal class Panel(private val a: Activity) {
             if (chatNameFor != fingerprint) {
                 // 把消息列表和当前消息文本一起传进去：列表里的文字、以及和消息一模一样的文字，
                 // 都不可能是会话名（消息列表是从 y=0 铺满整屏的，会穿过工具栏那一带）
-                chatName = reader.findChatTitle(decor, list, msgs.map { it.text }).orEmpty()
+                chatName = Roles.normalizeKey(
+                    reader.findChatTitle(decor, list, msgs.map { it.text }).orEmpty(),
+                )
                 chatNameFor = fingerprint
+                if (chatName.isBlank()) {
+                    // 认不出来就整页跳过（宁可漏记也不能记错人），但必须留证据 ——
+                    // 否则「为什么这个聊天页一条记录都没有」永远查不出来。
+                    dumpDiagnosis(
+                        decor, list, null,
+                        "认不出会话名，这一页不记录",
+                        extra = reader.describeTitleCandidates(decor, list),
+                    )
+                }
             }
             if (chatName.isBlank()) return
             val now = System.currentTimeMillis()
@@ -454,7 +465,7 @@ internal class Panel(private val a: Activity) {
             null
         }
         if (raw.isNullOrBlank()) return null
-        val role = Roles.decode(raw).firstOrNull { it.name == name } ?: return null
+        val role = Roles.decode(raw).firstOrNull { it.key == name } ?: return null
         if (role.relation.isBlank() && role.note.isBlank() && role.msgs.isEmpty()) return null
 
         val seen = current.map { (if (it.fromMe) "1" else "0") + "|" + it.text }.toHashSet()

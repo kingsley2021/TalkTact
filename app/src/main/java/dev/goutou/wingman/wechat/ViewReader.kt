@@ -77,50 +77,99 @@ internal class ViewReader(private val a: Activity) {
         return best
     }
 
+    /** 会出现在同一带的临时/状态文案，不是会话名。 */
+    private val TITLE_NOISE = listOf(
+        "对方正在输入", "正在输入", "网络连接不可用", "未连接", "点击重连", "连接中",
+        "语音通话中", "视频通话中", "邀请你", "按住说话", "松开 结束",
+    )
+
     /**
-     * 聊天页顶部那个标题 —— 也就是这个会话的名字，「角色」功能就拿它当 key。
+     * 聊天页顶部那个标题 —— 也就是这个会话的名字，「角色」功能拿它当 key。
      *
-     * 微信没给我们正经接口，只能从界面里找。这里踩过的坑，按重要性排：
+     * 微信没给我们正经接口，只能从界面里找。踩过的坑，按重要性排：
      *
-     * 1. **消息列表是从 y=0 铺满整屏的**（穿过工具栏底下），所以列表里的某条消息完全可能落在
-     *    顶部那一带、还恰好居中 —— 之前就是这么把消息当标题的。现在直接排除「在列表内部的节点」。
-     * 2. 标题栏那一带是**相对状态栏**的，不是屏幕高度的固定比例（刘海屏/不同状态栏高度都会偏），
-     *    所以按 rootWindowInsets 算区间。
-     * 3. 标题是**水平居中**的 —— 这一条从「加分项」改成「硬条件」。
-     * 4. 兜底：候选文本如果和当前屏幕上某条消息一模一样，也排除。
+     * 1. **消息列表是从 y=0 铺满整屏的**（穿过工具栏底下），所以列表里某条消息完全可能落在
+     *    顶部那一带、还恰好居中 —— 排除「在列表内部的节点」是这里最关键的一条。
+     * 2. 标题栏那一带按**相对状态栏**算，不用屏幕高度的固定比例（刘海屏/不同状态栏高度都会偏）。
+     * 3. 标题是**水平居中**的。
+     * 4. 有的版本标题不是 TextView 而是自绘控件 —— 那种问一遍 TextCapture 的钩子。
+     * 5. 「对方正在输入…」这类状态文案和标题在同一带，单独排掉。
      *
-     * 找不到就返回 null，调用方会整页跳过 —— 宁可漏记，也不能把消息记到别人头上。
+     * 第一遍在常规工具栏高度里找；找不到就在更宽的一带里再找一次（有些皮肤工具栏偏高）。
+     * 还是找不到就返回 null，调用方会整页跳过。
      */
     fun findChatTitle(root: View, list: ViewGroup?, avoidTexts: List<String> = emptyList()): String? {
         val screenW = width
         val inset = statusBarInset(root)
-        val bandTop = (inset - dp(8)).coerceAtLeast(0)
-        val bandBottom = inset + dp(100)          // 工具栏高度大约这么多
         val avoid = avoidTexts.map { it.trim() }.filter { it.isNotEmpty() }.toHashSet()
-        var best: String? = null
-        var bestScore = Int.MIN_VALUE
-        walk(root) { v ->
-            if (v !is TextView || v is EditText) return@walk
-            if (!v.isShown) return@walk
-            if (list != null && inside(list, v)) return@walk     // ← 关键：列表里的都不是标题
-            val t = v.text?.toString()?.trim().orEmpty()
-            if (t.isEmpty() || t.length > 24) return@walk
-            if (t in UI_WORDS || looksLikeViewDump(t)) return@walk
-            if (t in avoid) return@walk
-            if (v.width < dp(28) || v.height < dp(16)) return@walk
+        val bands = listOf(
+            (inset - dp(10)).coerceAtLeast(0) to inset + dp(96),
+            (inset - dp(10)).coerceAtLeast(0) to inset + dp(150),
+        )
+        for ((bandTop, bandBottom) in bands) {
+            var best: String? = null
+            var bestScore = Int.MIN_VALUE
+            walk(root, includeInvisible = true) { v ->
+                if (v is EditText || !v.isShown) return@walk
+                if (list != null && inside(list, v)) return@walk
+                val t = if (v is TextView) {
+                    v.text?.toString()?.trim().orEmpty()
+                } else {
+                    TextCapture.textOf(v)?.toString()?.trim().orEmpty()
+                }
+                if (t.isEmpty() || t.length > 32) return@walk
+                if (t in UI_WORDS || looksLikeViewDump(t)) return@walk
+                if (t in avoid) return@walk
+                if (TITLE_NOISE.any { t.startsWith(it) }) return@walk
+                if (v.width < dp(24) || v.height < dp(14)) return@walk
+                val loc = IntArray(2)
+                v.getLocationOnScreen(loc)
+                if (loc[1] < bandTop || loc[1] > bandBottom) return@walk
+                val off = abs((loc[0] + v.width / 2f) - screenW / 2f) / screenW.toFloat()
+                if (off > 0.16f) return@walk
+                // 居中是主判据；宽度和字号只用来打平手（标题通常比旁边的东西更大更宽）
+                val score = ((1f - off) * 1000).toInt() +
+                    v.width.coerceAtMost(screenW) / 20 +
+                    (v.textSize.coerceAtMost(dp(40).toFloat()) / 4f).toInt()
+                if (score > bestScore) {
+                    bestScore = score
+                    best = t
+                }
+            }
+            if (best != null) return best
+        }
+        return null
+    }
+
+    /** 认不出会话名时，把顶部那一带的候选全列出来（排查用，写进诊断）。 */
+    fun describeTitleCandidates(root: View, list: ViewGroup?): String {
+        val inset = statusBarInset(root)
+        val lo = (inset - dp(10)).coerceAtLeast(0)
+        val hi = inset + dp(150)
+        val sb = StringBuilder("—— 标题候选（顶部 ${lo}..${hi}）——\n")
+        var n = 0
+        walk(root, includeInvisible = true) { v ->
+            if (n >= 14) return@walk
+            if (v is EditText || !v.isShown) return@walk
+            val t = if (v is TextView) {
+                v.text?.toString()?.trim().orEmpty()
+            } else {
+                TextCapture.textOf(v)?.toString()?.trim().orEmpty()
+            }
+            if (t.isEmpty()) return@walk
             val loc = IntArray(2)
             v.getLocationOnScreen(loc)
-            if (loc[1] < bandTop || loc[1] > bandBottom) return@walk
-            val off = abs((loc[0] + v.width / 2f) - screenW / 2f) / screenW.toFloat()
-            if (off > 0.12f) return@walk                          // 标题一定是居中的
-            // 居中是主判据，宽度只用来打平手（标题容器可能拉得很宽，也可能 wrap_content）
-            val score = ((1f - off) * 1000).toInt() + v.width.coerceAtMost(screenW) / 20
-            if (score > bestScore) {
-                bestScore = score
-                best = t
-            }
+            if (loc[1] < lo || loc[1] > hi) return@walk
+            n++
+            sb.append("  ").append(v.javaClass.simpleName)
+                .append(' ').append(v.width).append('x').append(v.height)
+                .append('@').append(loc[0]).append(',').append(loc[1])
+                .append(" 在列表内=").append(list != null && inside(list, v))
+                .append(" 居中偏差=").append(((abs((loc[0] + v.width / 2f) - width / 2f) / width.toFloat()) * 100).toInt()).append('%')
+                .append(" \"").append(t.take(22)).append("\"\n")
         }
-        return best
+        if (n == 0) sb.append("  (顶部那一带一个带文字的控件都没有 —— 标题可能不是 TextView)\n")
+        return sb.toString()
     }
 
     /** v 是不是 container 的后代（用来把「消息列表里的文字」和「工具栏标题」分开）。 */
