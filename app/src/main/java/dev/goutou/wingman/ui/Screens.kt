@@ -83,6 +83,7 @@ import dev.goutou.wingman.config.GLASS_QUALITY_AUTO
 import dev.goutou.wingman.config.GLASS_QUALITY_HIGH
 import dev.goutou.wingman.config.GLASS_QUALITY_LOW
 import dev.goutou.wingman.config.Role
+import dev.goutou.wingman.config.Roles
 import dev.goutou.wingman.llm.BUILT_IN_SKILLS
 import dev.goutou.wingman.llm.Geo
 import dev.goutou.wingman.llm.LlmClient
@@ -1144,6 +1145,7 @@ fun AdvancedScreen(
 
     var diagNote by remember { mutableStateOf<String?>(null) }
     var proxyNote by remember { mutableStateOf<String?>(null) }
+    var newChat by remember { mutableStateOf("") }
     val proxyScope = rememberCoroutineScope()
     // 13+ 才有的通知权限。注意：前台服务**没有**它也照样能跑（系统仍会显示这条常驻通知），
     // 但既然要弹，就在用户打开开关时顺手要一下 —— 不然以后那条通知可能被折叠/静音。
@@ -1496,6 +1498,86 @@ fun AdvancedScreen(
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
             ) { Text(if (saved) "已保存（微信里下次识别即生效）" else "保存") }
+        }
+
+        GlassCard(d.glassAlpha) {
+            Text("会话白名单", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text(
+                "只让勾过的聊天（私聊 / 群聊）触发小助手。开着白名单时，没勾的会话**彻底不处理**：\n" +
+                    "不读内容、不记角色、也不调接口 —— 适合「只想在几个人身上用」。",
+                fontSize = 11.sp,
+                color = palette.sub,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("只对白名单里的聊天生效", fontSize = 15.sp, color = palette.text)
+                    Text(
+                        if (d.whitelistEnabled) {
+                            "已开：只有下面 ${d.whitelist.size} 个会话会工作"
+                        } else {
+                            "关着：所有聊天都会分析（默认）"
+                        },
+                        fontSize = 11.sp,
+                        color = palette.sub,
+                    )
+                }
+                Switch(checked = d.whitelistEnabled, onCheckedChange = { update(d.copy(whitelistEnabled = it)) })
+            }
+            if (d.whitelistEnabled) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = newChat,
+                        onValueChange = { newChat = it },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("写微信里显示的那个名字") },
+                        singleLine = true,
+                    )
+                    Button(
+                        onClick = {
+                            val k = Roles.normalizeKey(newChat)
+                            if (k.isNotBlank()) {
+                                update(d.copy(whitelist = d.whitelist + k))
+                                newChat = ""
+                            }
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                    ) { Text("添加") }
+                }
+                if (d.whitelist.isEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "还是空的 —— 开着白名单却一条都没加，等于所有聊天都不工作。",
+                        fontSize = 11.sp,
+                        color = palette.warn,
+                    )
+                } else {
+                    Spacer(Modifier.height(6.dp))
+                    d.whitelist.sorted().forEach { name ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(name, fontSize = 13.sp, color = palette.text, modifier = Modifier.weight(1f))
+                            Text(
+                                "移除",
+                                fontSize = 12.sp,
+                                color = palette.bad,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { update(d.copy(whitelist = d.whitelist - name)) }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "⚠ 名字要和微信里显示的一致（群聊就填群名；改过备注/昵称的用改过之后的名字）。\n" +
+                        "「点一下自动拉取所有好友和群聊」在下一版做 —— 现在先手动填。",
+                    fontSize = 11.sp,
+                    color = palette.sub,
+                )
+            }
         }
 
         GlassCard(d.glassAlpha) {

@@ -75,6 +75,10 @@ object Keys {
     const val PROXY_ON = "proxy_on"
     const val PROXY_PORT = "proxy_port"
     const val PROXY_TOKEN = "proxy_token"
+    /** 只对白名单里的会话工作（默认关 = 全部会话都工作） */
+    const val WHITELIST_ON = "whitelist_on"
+    /** 白名单：会话名（归一化过的，见 Roles.normalizeKey） */
+    const val WHITELIST = "whitelist"
 }
 
 /** 默认几点跑。 */
@@ -161,6 +165,13 @@ data class ConfigData(
     val proxyPort: Int = 8799,
     /** 随机 token；由 [ConfigStore.ensureProxyToken] 生成。和 selfStyle* 一样是**只读**字段，save() 不碰。 */
     val proxyToken: String = "",
+    /**
+     * 只对白名单里的聊天工作。
+     * 开着的时候，没勾的会话**彻底不处理** —— 不读内容、不记角色、也不调接口。
+     */
+    val whitelistEnabled: Boolean = false,
+    /** 白名单里的会话名（存的是 [Roles.normalizeKey] 归一化之后的样子）。 */
+    val whitelist: Set<String> = emptySet(),
 ) {
     /**
      * 分级模式下「风险评估」那一路要用的接口。
@@ -168,6 +179,9 @@ data class ConfigData(
      * 第二套一个字都没填 → 直接用第一套（合法用法：同一个模型、拆两路提示词）；
      * 只填了一部分 → 把填了的字段覆盖过去。不用逼用户把两套都填满。
      */
+    /** 这个会话允不允许工作。白名单关着 → 一律允许。 */
+    fun allowsChat(name: String): Boolean = chatAllowed(whitelistEnabled, whitelist, name)
+
     fun riskEndpoint(): ConfigData =
         if (baseUrl2.isBlank() && apiKey2.isBlank() && model2.isBlank()) {
             this
@@ -219,6 +233,11 @@ data class ConfigData(
             proxyEnabled = p.getBoolean(Keys.PROXY_ON, false),
             proxyPort = p.getInt(Keys.PROXY_PORT, 8799).coerceIn(1024, 65535),
             proxyToken = p.getString(Keys.PROXY_TOKEN, "").orEmpty(),
+            whitelistEnabled = p.getBoolean(Keys.WHITELIST_ON, false),
+            whitelist = p.getStringSet(Keys.WHITELIST, emptySet()).orEmpty()
+                .map { Roles.normalizeKey(it) }
+                .filter { it.isNotBlank() }
+                .toSet(),
         )
 
     }
@@ -271,6 +290,8 @@ class ConfigStore(context: Context) {
             .putBoolean(Keys.JSON_MODE, d.jsonMode)
             .putBoolean(Keys.PROXY_ON, d.proxyEnabled)
             .putInt(Keys.PROXY_PORT, d.proxyPort.coerceIn(1024, 65535))
+            .putBoolean(Keys.WHITELIST_ON, d.whitelistEnabled)
+            .putStringSet(Keys.WHITELIST, d.whitelist.map { Roles.normalizeKey(it) }.filter { it.isNotBlank() }.toHashSet())
             .apply()
     }
 
@@ -428,4 +449,21 @@ class ConfigStore(context: Context) {
     fun setScopeConfirmed(v: Boolean) {
         sp.edit().putBoolean(Keys.SCOPE_OK, v).apply()
     }
+}
+
+
+/**
+ * 白名单判定（纯函数，配单测）。
+ *
+ * 规则刻意很简单：**没开白名单 = 一律放行**；开了就只认集合里的名字。
+ * 名字统一走 [Roles.normalizeKey]（去空白、去尾部 "(3)" 这类计数），
+ * 免得「张三」和「张三 」被当成两个会话。
+ *
+ * 注意「开着白名单但集合是空的」→ 谁都不放行。这是有意的：
+ * 用户把开关打开却还一条没加时，应该表现为「都没反应」，而不是「悄悄全都放行了」。
+ */
+fun chatAllowed(whitelistEnabled: Boolean, whitelist: Set<String>, name: String): Boolean {
+    if (!whitelistEnabled) return true
+    val key = Roles.normalizeKey(name)
+    return key.isNotBlank() && whitelist.contains(key)
 }

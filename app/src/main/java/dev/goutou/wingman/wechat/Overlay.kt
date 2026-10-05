@@ -391,6 +391,15 @@ internal class Panel(private val a: Activity) {
         // 记进「角色」页（认不出会话名就整页跳过，宁可漏记也不记错人）
         recordToRoles(decor, list, msgs, fingerprint)
 
+        // 白名单：没勾的会话「彻底关闭」。位置放在 recordToRoles **之后** ——
+        // 只有跑完它，这一屏的 chatName 才是刚认出来的（不然第一帧用的还是上一个聊天的名字）。
+        // recordToRoles 里面也有一道同样的闸，那道负责「连记录都不做」。
+        if (blockedByWhitelist(cfg)) {
+            showIdle()
+            setChip("白名单外 · 未启用")
+            return
+        }
+
         // 安全网：一条文字都没读到，说明「读的东西」本身就不对。
         // 这时候去调模型只会浪费 token 并给出荒谬建议，所以先停下、留诊断、明确告诉用户。
         if (msgs.size >= 2 && msgs.all { it.attachment }) {
@@ -437,6 +446,19 @@ internal class Panel(private val a: Activity) {
      * 本页内先用「方向+文本」去一次重（模块 900ms 就会重读同一屏），App 侧还有
      * 「1 小时内重复只留一条」的兜底。
      */
+    /**
+     * 白名单判定。
+     *
+     * 会话名认不出来（chatName 为空）时**放行**：读不到标题本来就说明这一屏没认出来，
+     * 再按「不在白名单」拦一刀的话，用户看到的是「完全没反应」—— 比分析一次难查得多。
+     * 那种情况按老规矩走（照常分析 + 留诊断）。
+     */
+    private fun blockedByWhitelist(c: ConfigData): Boolean {
+        if (!c.whitelistEnabled) return false
+        if (chatName.isBlank()) return false
+        return !c.allowsChat(chatName)
+    }
+
     private fun recordToRoles(decor: View, list: ViewGroup, msgs: List<ChatMsg>, fingerprint: String) {
         try {
             if (chatNameFor != fingerprint) {
@@ -455,6 +477,9 @@ internal class Panel(private val a: Activity) {
                         extra = reader.describeTitleCandidates(decor, list),
                     )
                 }
+                // 白名单没勾这个会话 → 「彻底关闭」：这一页连记录都不做。
+                val c = config
+                if (c != null && blockedByWhitelist(c)) return
             }
             val now = System.currentTimeMillis()
             if (sentMsgs.size > 400) sentMsgs.clear()

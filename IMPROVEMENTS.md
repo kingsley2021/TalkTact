@@ -77,3 +77,40 @@
 - 结构化 ring buffer 日志：把每次「读到什么、判成什么」存成环形缓冲，出问题时可视化 ——
   排查「读不到消息」会从猜变成看。
 - 英文 README（扩大受众，但要长期双语维护）。
+
+### 接口形态：OpenAI 兼容 / Chat Completions（用户 2026-10-05 提）
+
+**先把名词弄清楚**（这是这一项真正要解决的事）：
+
+- **Chat Completions** 指的是 OpenAI 的 `POST /v1/chat/completions`：请求体是 `messages: [{role, content}]`，
+  返回 `choices[0].message.content`。2023 年 3 月发布，**现在整个生态的事实标准**。
+- 说某个服务「**OpenAI 兼容**」，通常就是指它照着 Chat Completions 的请求/响应形状实现了一遍
+  （所以它同时也是 Chat Completions —— 这两件事不是并列关系，而是「接口形状」和「谁家的实现」）。
+- 真正**不是** Chat Completions 的，常见有三类：
+  1. OpenAI 自己的新一代 **Responses API**（`POST /v1/responses`，用 `input` 而不是 `messages`，
+     返回 `output` 数组）—— 新模型的部分能力只在这个接口上；
+  2. 更老的 **Completions**（`POST /v1/completions`，`prompt` 进、纯文本出），现在基本废弃；
+  3. 各家原生协议：Anthropic 的 `/v1/messages`（`x-api-key` + `anthropic-version` 头）、
+     Gemini 的 `generateContent`、Ollama 的 `/api/chat` 等。
+
+**所以这个选项真正该做的是「接口形态」下拉**，而不是「兼容 / 不兼容」二选一：
+
+| 形态 | 路径 | 请求体 | 鉴权 |
+| :-- | :-- | :-- | :-- |
+| **OpenAI 兼容（Chat Completions）** ← 默认、现在这套 | `{base}/chat/completions` | `messages[]` | `Authorization: Bearer` |
+| OpenAI Responses | `{base}/responses` | `input` | `Authorization: Bearer` |
+| Anthropic Messages | `{base}/messages` | `messages[]` + `system` 单独字段 | `x-api-key` + `anthropic-version` |
+| 自定义路径 | 用户填 | 依旧 Chat Completions 形状 | 同 OpenAI |
+
+实现要点（真要动手时按这个来）：
+
+- 形状的差异只落在**三处**：URL 路径、请求体组装、鉴权头。所以抽一个 `ApiShape` 枚举 +
+  `buildRequest(shape, cfg, system, user)` / `parseResponse(shape, body)` 两个纯函数就能覆盖，
+  `LlmClient` 里那些 `fields["messages"] = ...` 收进去 —— 顺手还能给这几条分支补单测。
+- **Responses / Anthropic 的响应解析完全不同**，得各写一份取文本的逻辑（Responses 要从
+  `output[].content[].text` 里拼；Anthropic 在 `content[].text`）。
+- 现有用户**默认仍是 Chat Completions**，不动配置就完全不受影响 —— 这条是硬要求，别让人升级后突然不通。
+- 「本地代理」那一层是**透传**的，形状变了不用改代理（它只看路径前缀和 Authorization）——
+  唯一要注意的是代理的路径写死为 `/proxy/chat/completions`，加新形态时把路径也带上。
+- 顺带能解决一个已知坑：有些中转的 `/v1/models` 只列 Chat Completions 模型，
+  切到 Responses 形态后，模型列表要按形态分开缓存。
