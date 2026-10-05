@@ -259,6 +259,10 @@ class ConfigStore(context: Context) {
 
     fun usage(): Pair<Int, Int> = sp.getInt(Keys.CALLS, 0) to sp.getInt(Keys.TOKENS, 0)
 
+    /** 自检测到的两路延迟（写回复 / 风险评估；0 = 没测过）。设置页的公告栏读它。 */
+    fun probeMs(): Pair<Long, Long> =
+        sp.getLong(Keys.PROBE_REPLY_MS, 0L) to sp.getLong(Keys.PROBE_RISK_MS, 0L)
+
     /**
      * 自检测到的两路延迟（写回复 / 风险评估）。
      * 单独写、不走 save()：设置页拿着别的字段的旧快照保存时，不该把这俩覆盖回 0。
