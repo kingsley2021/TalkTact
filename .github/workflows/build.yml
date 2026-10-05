@@ -122,6 +122,15 @@ jobs:
           fi
           echo "签名校验通过"
 
+      # 单测报告（always：挂了才有用 —— 失败信息在这里面）
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-report
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
+          if-no-files-found: ignore
       # 截图回归产出的图（always：单测挂了也把图传上来，方便看是哪一步崩的）
       - uses: actions/upload-artifact@v4
         if: always()

@@ -101,7 +101,9 @@ dependencies {
     // （跑得比真机快、还能进 CI；渲染结果会作为 artifacts 上传，方便肉眼核对）
     testImplementation("org.robolectric:robolectric:4.13")
     testImplementation("androidx.compose.ui:ui-test-junit4")
-    testImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("androidx.test.ext:junit:1.2.1")
     testImplementation("androidx.test:core-ktx:1.6.1")
+    // ⚠️ 必须是 debugImplementation：它往**被测 APK 的 manifest** 里塞一个 ComponentActivity，
+    // 而 createComposeRule() 要启动的就是它 —— 放 testImplementation 的话运行时找不到这个 Activity
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
