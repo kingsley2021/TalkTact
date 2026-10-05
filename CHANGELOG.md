@@ -1,5 +1,18 @@
 # 变更记录
 
+## 未发布
+
+**新增自动发布 workflow（`.github/workflows/publish.yml`）**
+
+推一个 `v*` 标签就会自动构建并发布到 LSPosed 官方模块仓库，release 的 tag 自动取
+`versionCode-versionName`（官方要求的格式），并把 `publish/SUMMARY`、`publish/README.md` 同步过去。
+
+需要一个 classic PAT（scope 勾 `repo`）存成本仓库的 `MODULE_REPO_TOKEN` secret —— 那个组织开了
+「OAuth 应用访问限制」，普通第三方 OAuth 应用做不了写操作，PAT 不受此限。
+
+仓库简介（= 模块显示名）走的是 admin 接口，maintain 角色改不了，需要在仓库页面手动设一次。
+
+
 ## v0.6.0
 
 **改 applicationId：`dev.goutou.wingman` → `io.github.shibry88_netizen.talktact`**

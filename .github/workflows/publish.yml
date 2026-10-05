@@ -1,0 +1,74 @@
+name: publish
+
+# 把 APK 发到 LSPosed 官方模块仓库（Xposed-Modules-Repo）。
+#
+# 为什么需要 MODULE_REPO_TOKEN：那个组织开了「OAuth 应用访问限制」，
+# 普通第三方 OAuth 应用（含网页端登录用的那种）会被挡在写操作之外，PAT 不受这条限制。
+# 建一个 classic token，scope 只勾 repo，然后在本仓库 Settings → Secrets 里加名为
+# MODULE_REPO_TOKEN 的 secret 即可。
+#
+# 用法：推一个 v* 标签（比如 git tag v0.6.0 && git push --tags），或者手动点 Run workflow。
+# release 的 tag 会自动取 build.gradle.kts 里的 versionCode-versionName（官方要求这个格式）。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: 8.7 }
+
+      - name: build apk
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: read version
+        id: v
+        run: |
+          CODE=$(sed -n 's/.*versionCode = \([0-9]\+\).*/\1/p' app/build.gradle.kts | head -1)
+          NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "准备发布：$CODE-$NAME"
+
+      - name: publish to Xposed-Modules-Repo
+        env:
+          GH_TOKEN: ${{ secrets.MODULE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          R=Xposed-Modules-Repo/io.github.shibry88_netizen.talktact
+          TAG="${{ steps.v.outputs.code }}-${{ steps.v.outputs.name }}"
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+
+          # 同步 SUMMARY / README.md（有就更新，没有就创建）
+          for f in SUMMARY README.md; do
+            SHA=$(gh api "/repos/$R/contents/$f" --jq '.sha' 2>/dev/null || true)
+            if [ -n "$SHA" ]; then
+              gh api -X PUT "/repos/$R/contents/$f" -f message="Sync $f" \
+                -f content="$(base64 -w0 "publish/$f")" -f sha="$SHA" >/dev/null
+            else
+              gh api -X PUT "/repos/$R/contents/$f" -f message="Add $f" \
+                -f content="$(base64 -w0 "publish/$f")" >/dev/null
+            fi
+            echo "已同步 $f"
+          done
+
+          # release：tag 必须是「版本号-版本名」，这是官方硬性要求
+          if gh release view "$TAG" -R "$R" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber -R "$R"
+            echo "已更新既有 release $TAG"
+          else
+            gh release create "$TAG" "$APK" -R "$R" \
+              --title "${{ steps.v.outputs.name }}" \
+              --notes "变更记录见 https://github.com/shibry88-netizen/TalkTact/blob/main/CHANGELOG.md"
+            echo "已创建 release $TAG"
+          fi
+
+          # 提醒：仓库简介（= 模块显示名）走的是 admin 接口，maintain 角色改不了，
+          # 需要在仓库页面右侧 About 面板里手动设置一次。
+          echo "::notice::若仓库简介为空，请手动设置（About → ⚙️ → Description）"
