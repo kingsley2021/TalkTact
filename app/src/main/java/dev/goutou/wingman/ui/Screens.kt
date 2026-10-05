@@ -960,7 +960,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                 Column(
                     Modifier.fillMaxWidth().combinedClickable(
                         onClick = { onOpen(role.name) },
-                        onLongPress = { pendingDelete = role.name },
+                        onLongClick = { pendingDelete = role.name },
                     ),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
