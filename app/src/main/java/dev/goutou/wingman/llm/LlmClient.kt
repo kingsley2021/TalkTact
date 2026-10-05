@@ -43,13 +43,21 @@ class LlmClient(
      *   刻意拼进 user 消息而不是 system：skill 提示词要保持原样（App 里显示的字长、
      *   「最近一次调用」里核对的那份都是它），角色背景属于「这一次的素材」。
      */
-    fun analyze(msgs: List<ChatMsg>, roleContext: String? = null): LlmResult {
+    fun analyze(msgs: List<ChatMsg>, roleContext: String? = null): LlmResult =
+        analyzeWith(cfg.prompt, msgs, roleContext)
+
+    /**
+     * 用指定的 system 提示词跑一次。
+     *
+     * 抽出来的原因：分级模式下两路各带自己的提示词（风险评估 / 写回复），
+     * [analyze] 就是「用当前 skill 那一份」的快捷方式。
+     */
+    fun analyzeWith(systemText: String, msgs: List<ChatMsg>, roleContext: String? = null): LlmResult {
         if (cfg.apiKey.isBlank()) throw LlmException("还没填 API Key", "到「设置」里填地址和 Key")
         if (msgs.isEmpty()) throw LlmException("没读到聊天内容", null)
 
         val start = System.currentTimeMillis()
-        // 先落成两个局部变量：trace 要能原样看到「发出去的是什么」，不能只看 cfg
-        val systemText = cfg.prompt
+        // trace 要能原样看到「发出去的是什么」，所以用传进来的那份，而不是回头读 cfg
         // 顺序刻意是「跨请求不变的东西在前、每次都变的东西在后」：
         // system（skill）→ 角色档案 + 说话风格 → 聊天记录。
         // 这样同一个联系人的前两次之后，前缀就一直一样，能吃到服务端的**前缀缓存**

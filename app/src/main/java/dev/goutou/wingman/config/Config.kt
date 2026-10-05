@@ -58,6 +58,12 @@ object Keys {
     const val SELF_SKILL_AT = "self_skill_at"
     /** 每天几点跑（0..23，本地时间） */
     const val SELF_STYLE_HOUR = "self_style_hour"
+    /** 模型分级模式：开 = 风险一路 + 写回复一路（可各用一套接口、各带一份提示词） */
+    const val GRADED = "graded_mode"
+    /** 第二套接口：给「风险评估」那一路用；留空 = 逐项复用第一套 */
+    const val BASE2 = "base_url_2"
+    const val KEY2 = "api_key_2"
+    const val MODEL2 = "model_2"
 }
 
 /** 默认几点跑。 */
@@ -102,7 +108,33 @@ data class ConfigData(
      * 由 [ConfigStore.setSelfStyleHour] 单独写，save() 不碰它。
      */
     val selfStyleHour: Int = DEFAULT_SELF_STYLE_HOUR,
+    /**
+     * 模型分级模式。关（默认）= 直通：一套接口、一份提示词、一次调用，和以前完全一样。
+     * 开 = 风险一路 + 写回复一路，两路各带自己的提示词（见 llm/Graded.kt）。
+     */
+    val graded: Boolean = false,
+    /** 第二套接口（给风险评估那一路用）。留空 = 复用第一套 —— 那样等于「同一个模型拆两路提示词」。 */
+    val baseUrl2: String = "",
+    val apiKey2: String = "",
+    val model2: String = "",
 ) {
+    /**
+     * 分级模式下「风险评估」那一路要用的接口。
+     *
+     * 第二套一个字都没填 → 直接用第一套（合法用法：同一个模型、拆两路提示词）；
+     * 只填了一部分 → 把填了的字段覆盖过去。不用逼用户把两套都填满。
+     */
+    fun riskEndpoint(): ConfigData =
+        if (baseUrl2.isBlank() && apiKey2.isBlank() && model2.isBlank()) {
+            this
+        } else {
+            copy(
+                baseUrl = baseUrl2.ifBlank { baseUrl },
+                apiKey = apiKey2.ifBlank { apiKey },
+                model = model2.ifBlank { model },
+            )
+        }
+
     companion object {
         /** 老版本存过的 max_tokens 不在四档里（比如 500），归一化到最近的档，免得设置页四档都没选中。 */
         fun snapTier(v: Int): Int = when {
@@ -132,7 +164,12 @@ data class ConfigData(
             allowSensitive = p.getBoolean(Keys.SENSITIVE, false),
             selfStyleEnabled = p.getBoolean(Keys.SELF_STYLE_ON, false),
             selfStyleHour = p.getInt(Keys.SELF_STYLE_HOUR, DEFAULT_SELF_STYLE_HOUR).coerceIn(0, 23),
+            graded = p.getBoolean(Keys.GRADED, false),
+            baseUrl2 = p.getString(Keys.BASE2, "").orEmpty(),
+            apiKey2 = p.getString(Keys.KEY2, "").orEmpty(),
+            model2 = p.getString(Keys.MODEL2, "").orEmpty(),
         )
+
     }
 }
 
@@ -175,6 +212,10 @@ class ConfigStore(context: Context) {
             .putFloat(Keys.BG_DIM, d.bgDim.coerceIn(0f, 0.8f))
             .putString(Keys.SKILL, d.skillId)
             .putBoolean(Keys.MENTOR_ADV, d.mentorAdvanced)
+            .putBoolean(Keys.GRADED, d.graded)
+            .putString(Keys.BASE2, d.baseUrl2.trim())
+            .putString(Keys.KEY2, d.apiKey2.trim())
+            .putString(Keys.MODEL2, d.model2.trim())
             .apply()
     }
 

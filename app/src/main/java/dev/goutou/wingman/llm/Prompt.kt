@@ -147,3 +147,43 @@ fun ensureJsonContract(text: String): String =
     } else {
         text.trimEnd() + "\n\n" + JSON_CONTRACT
     }
+
+
+// ---------------- 模型分级模式：两路各一份契约 ----------------
+
+/**
+ * 分级模式里「风险评估」那一路的契约：只要 intent / risk / note。
+ * 刻意不要 replies —— 写回复交给另一路（可能是另一个模型）。
+ */
+const val RISK_CONTRACT = """这次**只做风险评估**，不要写任何回复。
+只输出下面这个 JSON，不要 markdown、不要任何多余文字：
+{"intent":"对方最后一句的真实意图（一句话）","risk":"低/中/高","note":"一句话提醒"}"""
+
+/**
+ * 分级模式里「写回复」那一路的契约：只要 replies / best / why。
+ * 前面那段 skill 正文里的「先想意图和风险」仍然有用（那是思考过程），只是不再输出它们。
+ */
+const val REPLY_CONTRACT = """这次**只写回复**，不用复述意图和风险（已经有另一路在做了）。
+只输出下面这个 JSON，不要 markdown、不要任何多余文字：
+{"replies":[{"style":"稳妥","text":"..."},{"style":"幽默","text":"..."},{"style":"推进","text":"..."}],"best":0,"why":"为什么推荐它（一句话）"}"""
+
+/**
+ * 把 skill 提示词末尾的「输出契约」摘掉 —— 已确定的契约永远在最后一段，
+ * 所以从最后一个 `{"intent"` 那一行起整段砍掉就行（后面的解释文字也一起去掉）。
+ */
+internal fun stripOutputContract(prompt: String): String {
+    val marker = prompt.lastIndexOf("{\"intent\"")
+    if (marker < 0) return prompt.trimEnd()
+    // 契约是一个独立段落（前面通常写着「只输出下面这个 JSON」，后面可能还有字段说明），
+    // 所以往回到最近的空行整段砍掉 —— 只砍 JSON 那一行会留下一句没有下文的「只输出…」。
+    val paraStart = prompt.lastIndexOf("\n\n", marker)
+    return prompt.substring(0, if (paraStart >= 0) paraStart else marker).trimEnd()
+}
+
+/** 分级模式：风险一路要发的 system。 */
+fun gradedRiskPrompt(prompt: String): String =
+    stripOutputContract(prompt) + "\n\n" + RISK_CONTRACT
+
+/** 分级模式：写回复一路要发的 system。 */
+fun gradedReplyPrompt(prompt: String): String =
+    stripOutputContract(prompt) + "\n\n" + REPLY_CONTRACT

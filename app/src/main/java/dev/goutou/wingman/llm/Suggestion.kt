@@ -15,6 +15,11 @@ data class Suggestion(
     val why: String = "",
     /** true = 模型输出被截断过，这份是从残缺 JSON 里抢救出来的（提醒用户重试） */
     val partial: Boolean = false,
+    /**
+     * 分级模式下「有一路没跑通」这类提示，直接显示在卡片上。
+     * 空 = 两路都正常（直通模式也永远是空）。
+     */
+    val warnings: List<String> = emptyList(),
 )
 
 /** 带「给用户看的下一步建议」的异常，UI 直接显示 message + hint。 */
