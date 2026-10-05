@@ -22,10 +22,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
-      - uses: android-actions/setup-android@v3
-      # libxposed api/service 102 的 AAR 声明了 minCompileSdk=37，平台得装 37
+      # libxposed api/service 102 的 AAR 声明了 minCompileSdk=37，runner 上要有平台 37。
+      # 这里直接调 sdkmanager 而不走 android-actions/setup-android：那个 action 会去装
+      # 「tools」包，而它在新版 SDK 仓库里已被移除，于是整步直接失败。我们只需要平台本身。
       - name: install Android platform 37
-        run: sdkmanager --install "platforms;android-37"
+        run: |
+          set -e
+          ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          echo "sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" --install "platforms;android-37"
+          ls "$ANDROID_HOME/platforms"
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: 8.13 }
 
