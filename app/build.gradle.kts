@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.shibry88_netizen.talktact"
         minSdk = 31  // Android 12+：液态玻璃的真实背景模糊走 RenderEffect
         targetSdk = 34
-        versionCode = 26
-        versionName = "0.7.1"
+        versionCode = 30
+        versionName = "0.8.3"
     }
     /**
      * 固定签名。
@@ -63,6 +63,10 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.core:core-ktx:1.13.1")
+
+    // 「每天中午 12:00 提炼说话风格」用它的周期任务：App 没开、手机重启过都照跑，
+    // 也不必申请精确闹钟权限（AlarmManager 那条路 Android 12+ 要额外权限）
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     // 现代 Xposed API（libxposed）。必须是 compileOnly：这些类由框架在运行时提供，
     // 打进 APK 反而会和框架自己那份撞车。
