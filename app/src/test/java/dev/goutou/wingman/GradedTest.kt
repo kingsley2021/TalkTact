@@ -4,6 +4,7 @@ import dev.goutou.wingman.llm.DEFAULT_PROMPT
 import dev.goutou.wingman.llm.Reply
 import dev.goutou.wingman.llm.Suggestion
 import dev.goutou.wingman.llm.gradedReplyPrompt
+import dev.goutou.wingman.llm.gradedWaitMs
 import dev.goutou.wingman.llm.gradedRiskPrompt
 import dev.goutou.wingman.llm.mergeGraded
 import org.junit.Assert.assertEquals
@@ -98,5 +99,22 @@ class GradedTest {
     fun `没有契约的自定义提示词也能用`() {
         val custom = "你是我的助理，随便聊。"
         assertEquals(custom + "\n\n" + dev.goutou.wingman.llm.RISK_CONTRACT, gradedRiskPrompt(custom))
+    }
+
+    // ---------------- 两路对齐等待 ----------------
+
+    @Test
+    fun `没测过就给 60 秒兜底`() {
+        assertEquals(60_000L, gradedWaitMs(0L, 0L))
+    }
+
+    @Test
+    fun `按慢的那一路放大 并夹在上下限之间`() {
+        // 慢的是 900ms → 900*4+10000 = 13600，低于下限 → 60 秒
+        assertEquals(60_000L, gradedWaitMs(500L, 900L))
+        // 慢的是 20s → 20*4+10 = 90 秒
+        assertEquals(90_000L, gradedWaitMs(3_000L, 20_000L))
+        // 慢的是 60s → 250 秒，超过上限 → 180 秒
+        assertEquals(180_000L, gradedWaitMs(60_000L, 1_000L))
     }
 }

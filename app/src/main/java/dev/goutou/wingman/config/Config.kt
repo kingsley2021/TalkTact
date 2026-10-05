@@ -68,6 +68,9 @@ object Keys {
     const val GLASS_QUALITY = "glass_quality"
     /** 严格 JSON 输出：请求里带 response_format=json_object（只作用于「生成候选」） */
     const val JSON_MODE = "json_mode"
+    /** 「接口自检」量到的两路延迟（ms）；设置页的公告栏与「两路对齐等待」都用它 */
+    const val PROBE_REPLY_MS = "probe_reply_ms"
+    const val PROBE_RISK_MS = "probe_risk_ms"
 }
 
 /** 默认几点跑。 */
@@ -140,6 +143,12 @@ data class ConfigData(
      * 默认关：有些中转站不认这个参数，开了会直接报错。开关只作用于「生成候选」那一条调用路径。
      */
     val jsonMode: Boolean = false,
+    /**
+     * 「接口自检」量到的两路延迟（毫秒；0 = 没测过）。
+     * 和 [selfStyleEnabled] 一样是**只读**字段：由 [ConfigStore.saveProbeMs] 单独写，save() 不碰。
+     */
+    val probeReplyMs: Long = 0L,
+    val probeRiskMs: Long = 0L,
 ) {
     /**
      * 分级模式下「风险评估」那一路要用的接口。
@@ -193,6 +202,8 @@ data class ConfigData(
             model2 = p.getString(Keys.MODEL2, "").orEmpty(),
             glassQuality = p.getString(Keys.GLASS_QUALITY, GLASS_QUALITY_AUTO).orEmpty().ifBlank { GLASS_QUALITY_AUTO },
             jsonMode = p.getBoolean(Keys.JSON_MODE, false),
+            probeReplyMs = p.getLong(Keys.PROBE_REPLY_MS, 0L).coerceAtLeast(0L),
+            probeRiskMs = p.getLong(Keys.PROBE_RISK_MS, 0L).coerceAtLeast(0L),
         )
 
     }
@@ -247,6 +258,17 @@ class ConfigStore(context: Context) {
     }
 
     fun usage(): Pair<Int, Int> = sp.getInt(Keys.CALLS, 0) to sp.getInt(Keys.TOKENS, 0)
+
+    /**
+     * 自检测到的两路延迟（写回复 / 风险评估）。
+     * 单独写、不走 save()：设置页拿着别的字段的旧快照保存时，不该把这俩覆盖回 0。
+     */
+    fun saveProbeMs(replyMs: Long, riskMs: Long) {
+        sp.edit()
+            .putLong(Keys.PROBE_REPLY_MS, replyMs.coerceAtLeast(0L))
+            .putLong(Keys.PROBE_RISK_MS, riskMs.coerceAtLeast(0L))
+            .apply()
+    }
 
     fun addUsage(tokens: Int) {
         sp.edit()

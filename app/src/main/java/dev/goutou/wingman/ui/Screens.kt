@@ -57,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -85,6 +86,7 @@ import dev.goutou.wingman.llm.RemoteSkill
 import dev.goutou.wingman.llm.Graded
 import dev.goutou.wingman.llm.REWRITE_PRESETS
 import dev.goutou.wingman.llm.Suggestion
+import dev.goutou.wingman.llm.gradedWaitMs
 import dev.goutou.wingman.llm.isReplyTooLong
 import dev.goutou.wingman.wechat.ChatMsg
 import dev.goutou.wingman.wechat.Sensitive
@@ -464,11 +466,35 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                                     if (r.totalTokens > 0) store.addUsage(r.totalTokens)
                                     probeOk = true
                                     verdict = "通 · 往返 ${r.totalMs}ms · 模型 ${r.model} · ${r.totalTokens} token"
-                                    detail = buildString {
-                                        append("连接 ").append(r.connectMs?.let { "${it}ms" } ?: "未测得")
-                                        append(" · DNS ${r.dnsMs}ms")
-                                        r.targetIp?.let { append(" · 目标 ").append(it) }
+                                    val sb = StringBuilder()
+                                    sb.append("写回复一路：连接 ")
+                                        .append(r.connectMs?.let { "${it}ms" } ?: "未测得")
+                                        .append(" · DNS ${r.dnsMs}ms · 往返 ${r.totalMs}ms")
+                                    r.targetIp?.let { sb.append(" · 目标 ").append(it) }
+
+                                    // 分级模式：第二套接口也得单独测 —— 它可能是完全不同的服务商。
+                                    // 两路的延迟要分别列出来；慢的那一路决定整张卡片什么时候能出来。
+                                    var riskMs = 0L
+                                    if (conf.graded) {
+                                        try {
+                                            val r2 = withContext(Dispatchers.IO) { LlmClient(conf.riskEndpoint()).probe() }
+                                            if (r2.totalTokens > 0) store.addUsage(r2.totalTokens)
+                                            riskMs = r2.totalMs
+                                            sb.append("\n风险一路：连接 ")
+                                                .append(r2.connectMs?.let { "${it}ms" } ?: "未测得")
+                                                .append(" · DNS ${r2.dnsMs}ms · 往返 ${r2.totalMs}ms")
+                                            r2.targetIp?.let { sb.append(" · 目标 ").append(it) }
+                                            val diff = kotlin.math.abs(r.totalMs - r2.totalMs)
+                                            if (diff > 300) {
+                                                sb.append("\n两路差 ${diff}ms —— 快的那路要等慢的那路（自检只量最小请求，实际生成更久）")
+                                            }
+                                        } catch (t: Throwable) {
+                                            sb.append("\n风险一路：失败 —— ").append(t.message)
+                                        }
                                     }
+                                    detail = sb.toString()
+                                    // 记下来：设置页的公告栏要显示，运行时「两路对齐等待」也用它
+                                    store.saveProbeMs(r.totalMs, riskMs)
                                 } catch (t: Throwable) {
                                     probeOk = false
                                     verdict = "失败：${t.message}"
@@ -552,6 +578,7 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
                                         skillPrompt = conf.prompt,
                                         msgs = msgs,
                                         roleContext = null,
+                                        waitMs = gradedWaitMs(conf.probeReplyMs, conf.probeRiskMs),
                                     )
                                 }
                                 suggestion = out.suggestion
@@ -1129,6 +1156,23 @@ fun AdvancedScreen(
         }
 
         GlassCard(d.glassAlpha) {
+            // 公告栏放最上面：换接口/换模型最该先知道的就是「这俩大概要等多久」
+            val (replyMs, riskMs) = store.probeMs()
+            NoticeBanner(
+                title = "自检延迟（和接口、模型都有关）",
+                lines = buildList {
+                    add(if (replyMs > 0) "${d.model}（写回复）：${replyMs}ms" else "${d.model}（写回复）：还没测过")
+                    if (d.graded) {
+                        val m2 = d.model2.ifBlank { d.model }
+                        add(if (riskMs > 0) "$m2（风险）：${riskMs}ms" else "$m2（风险）：还没测过")
+                        if (replyMs > 0L && riskMs > 0L) {
+                            add("两路差 ${kotlin.math.abs(replyMs - riskMs)}ms —— 卡片要等慢的那一路")
+                        }
+                    }
+                    add("换接口或换模型都会让它变；回首页点「接口自检」重新测一次。")
+                },
+            )
+            Spacer(Modifier.height(10.dp))
             Text("接口地址", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
@@ -2111,4 +2155,33 @@ private fun buildDiagZip(context: Context, store: ConfigStore, cfg: ConfigData):
             "06-用量.txt" to "调用次数：$calls\n累计 token：$tokens\n",
         ),
     )
+}
+
+/**
+ * 白底公告栏。
+ *
+ * 和玻璃卡片刻意不同：玻璃是「界面的一部分」，公告栏是**贴在界面上的纸条** ——
+ * 白底 + 深色字、完全不透明，扫一眼就能读到，不会和背景混在一起。
+ */
+@Composable
+fun NoticeBanner(title: String, lines: List<String>) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White)
+            .padding(12.dp),
+    ) {
+        Column {
+            Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFF1C1B22))
+            lines.forEach { line ->
+                Text(
+                    line,
+                    fontSize = 11.sp,
+                    color = Color(0xFF55525E),
+                    modifier = Modifier.padding(top = 3.dp),
+                )
+            }
+        }
+    }
 }

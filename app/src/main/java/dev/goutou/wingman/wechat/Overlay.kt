@@ -26,6 +26,7 @@ import dev.goutou.wingman.config.RoleMsg
 import dev.goutou.wingman.llm.LlmClient
 import dev.goutou.wingman.llm.LlmException
 import dev.goutou.wingman.llm.Graded
+import dev.goutou.wingman.llm.gradedWaitMs
 import dev.goutou.wingman.llm.isReplyTooLong
 import dev.goutou.wingman.llm.REWRITE_PRESETS
 import dev.goutou.wingman.llm.Reply
@@ -694,6 +695,7 @@ internal class Panel(private val a: Activity) {
                         skillPrompt = cfg.prompt,
                         msgs = msgs,
                         roleContext = roleContext,
+                        waitMs = gradedWaitMs(cfg.probeReplyMs, cfg.probeRiskMs),
                     )
                     suggestion = out.suggestion
                     tokens = out.totalTokens
