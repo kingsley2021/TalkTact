@@ -46,6 +46,15 @@ jobs:
           TAG="${{ steps.v.outputs.code }}-${{ steps.v.outputs.name }}"
           APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
 
+          # 附件改成好认的名字（gradle 出来的叫 app-debug.apk，在 release 页面上很迷惑）
+          ASSET="TalkTact-${{ steps.v.outputs.name }}.apk"
+          cp "$APK" "/tmp/$ASSET"
+          # 顺带清掉之前用旧名字传上去的那个附件
+          if gh release view "$TAG" -R "$R" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx 'app-debug.apk'; then
+            gh release delete-asset "$TAG" app-debug.apk -R "$R" --yes
+            echo "已清理旧附件 app-debug.apk"
+          fi
+
           # 同步 SUMMARY / README.md（有就更新，没有就创建）
           for f in SUMMARY README.md; do
             SHA=$(gh api "/repos/$R/contents/$f" --jq '.sha' 2>/dev/null || true)
@@ -61,10 +70,10 @@ jobs:
 
           # release：tag 必须是「版本号-版本名」，这是官方硬性要求
           if gh release view "$TAG" -R "$R" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK" --clobber -R "$R"
+            gh release upload "$TAG" "/tmp/$ASSET" --clobber -R "$R"
             echo "已更新既有 release $TAG"
           else
-            gh release create "$TAG" "$APK" -R "$R" \
+            gh release create "$TAG" "/tmp/$ASSET" -R "$R" \
               --title "${{ steps.v.outputs.name }}" \
               --notes "变更记录见 https://github.com/shibry88-netizen/TalkTact/blob/main/CHANGELOG.md"
             echo "已创建 release $TAG"
