@@ -76,6 +76,7 @@ import dev.goutou.wingman.llm.LlmClient
 import dev.goutou.wingman.llm.LlmException
 import dev.goutou.wingman.llm.NetInfo
 import dev.goutou.wingman.llm.RemoteSkill
+import dev.goutou.wingman.llm.REWRITE_PRESETS
 import dev.goutou.wingman.llm.Suggestion
 import dev.goutou.wingman.wechat.ChatMsg
 import dev.goutou.wingman.wechat.Sensitive
@@ -492,6 +493,7 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
     val palette = LocalPalette.current
     var input by remember { mutableStateOf("对方: 在吗\n我: 在\n对方: 周末有空吗，想约你吃个饭") }
     var suggestion by remember { mutableStateOf<Suggestion?>(null) }
+    var rewriting by remember { mutableStateOf<Int?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var info by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
@@ -574,6 +576,43 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
                         Text(reply.text, fontSize = 15.sp, color = palette.text)
                         if (starred && s.why.isNotBlank()) {
                             Text(s.why, fontSize = 12.sp, color = palette.sub)
+                        }
+                        // 只改这一条：走 complete()（一句话进一句话出），另外两条不动
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            REWRITE_PRESETS.forEach { preset ->
+                                Text(
+                                    text = if (rewriting == index) "改写中…" else preset.first,
+                                    fontSize = 11.sp,
+                                    color = palette.primary,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(palette.primary.copy(alpha = 0.12f))
+                                        .clickable(enabled = rewriting == null) {
+                                            val old = suggestion?.replies?.getOrNull(index)?.text ?: return@clickable
+                                            rewriting = index
+                                            val conf = store.load()
+                                            scope.launch {
+                                                try {
+                                                    val (newText, tokens) = withContext(Dispatchers.IO) {
+                                                        LlmClient(conf).rewrite(old, preset.second)
+                                                    }
+                                                    if (tokens > 0) store.addUsage(tokens)
+                                                    suggestion = suggestion?.let { cur ->
+                                                        val list = cur.replies.toMutableList()
+                                                        if (index in list.indices) {
+                                                            list[index] = list[index].copy(text = newText)
+                                                        }
+                                                        cur.copy(replies = list)
+                                                    }
+                                                } catch (t: Throwable) {
+                                                    error = "改写失败：${t.message}"
+                                                }
+                                                rewriting = null
+                                            }
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                                )
+                            }
                         }
                         Text("点击复制", fontSize = 11.sp, color = palette.sub)
                     }

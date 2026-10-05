@@ -25,6 +25,8 @@ import dev.goutou.wingman.config.Roles
 import dev.goutou.wingman.config.RoleMsg
 import dev.goutou.wingman.llm.LlmClient
 import dev.goutou.wingman.llm.LlmException
+import dev.goutou.wingman.llm.REWRITE_PRESETS
+import dev.goutou.wingman.llm.Reply
 import dev.goutou.wingman.llm.Suggestion
 import dev.goutou.wingman.config.SELF_ROLE_KEY
 
@@ -722,6 +724,65 @@ internal class Panel(private val a: Activity) {
 
     // ---------------- 渲染 ----------------
 
+    /**
+     * 单条改写：只改用户点的那一条。
+     *
+     * 结果写回 [cache]（下一次 tick 重渲染还是新文本），同时就地更新这个 TextView。
+     * 全程 runCatching —— 这段跑在微信进程里，漏一个异常就是微信崩。
+     */
+    private fun rewriteReply(
+        index: Int,
+        reply: Reply,
+        body: TextView,
+        head: String,
+        instruction: String,
+        opts: LinearLayout,
+        shown: Suggestion,
+    ) {
+        val c = config
+        if (c == null) {
+            showMessage("读不到配置，改写用不了", isError = true)
+            return
+        }
+        if (busy) return
+        opts.visibility = View.GONE
+        val gen = generation
+        val original = reply.text
+        body.text = "$head｜改写中…"
+        busy = true
+        Thread {
+            var text: String? = null
+            var err: Throwable? = null
+            var used = 0
+            try {
+                val (t, tokens) = LlmClient(c).rewrite(original, instruction)
+                text = t
+                used = tokens
+            } catch (t: Throwable) {
+                err = t
+            }
+            val done = text
+            val failure = err
+            handler.post {
+                runCatching {
+                    busy = false
+                    if (gen != generation) return@runCatching
+                    if (done != null) {
+                        body.text = "$head｜$done"
+                        val cur = cache[lastFingerprint] ?: shown
+                        val list = cur.replies.toMutableList()
+                        if (index in list.indices) list[index] = list[index].copy(text = done)
+                        cache[lastFingerprint] = cur.copy(replies = list)
+                        if (used > 0) Heartbeat.send(a, used)
+                    } else {
+                        body.text = "$head｜$original"
+                        showMessage("改写失败：${failure?.message ?: "未知错误"}", isError = true)
+                    }
+                }.onFailure { XposedApi.log("rewrite: $it") }
+            }
+        }.start()
+    }
+
     private fun render(s: Suggestion, msgs: List<ChatMsg>, fromCache: Boolean) {
         hasResult = true
         title.text = "军师 · ${s.intent} · 风险${s.risk}" + if (fromCache) " · 缓存" else ""
@@ -733,22 +794,69 @@ internal class Panel(private val a: Activity) {
         }
         s.replies.forEachIndexed { index, r ->
             val starred = s.best == index
-            val view = label("${if (starred) "★ " else ""}${r.style}｜${r.text}", 14f, colorMain) {
+            val head = if (starred) "★ ${r.style}" else r.style
+            val row = LinearLayout(a).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val body = label("$head｜${r.text}", 14f, colorMain) {
                 background = roundRect(colorReply, 14)
                 setPadding(dp(12), dp(8), dp(12), dp(8))
             }
-            view.setOnClickListener { fill(r.text) }
-            view.setOnLongClickListener {
+            body.setOnClickListener { fill(r.text) }
+            body.setOnLongClickListener {
                 copyToClipboard(r.text)
                 true
             }
+            row.addView(body, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+            // 「✎」= 对**这一条**做局部改写（再短点 / 更正式 / 换个说法），另外两条不动
+            val edit = label("✎", 13f, colorSub) {
+                background = roundRect(colorReply, 14)
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                gravity = Gravity.CENTER
+            }
+            row.addView(
+                edit,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    .apply { leftMargin = dp(4) },
+            )
             bodyBox.addView(
-                view,
+                row,
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                     .apply { topMargin = dp(6) },
             )
             if (starred && s.why.isNotBlank()) {
                 bodyBox.addView(label("★ 最推荐：${s.why}", 10f, colorSub) { setPadding(dp(12), dp(2), 0, 0) })
+            }
+
+            // 三个预设默认不占地方，点「✎」才出现
+            val opts = LinearLayout(a).apply {
+                orientation = LinearLayout.HORIZONTAL
+                visibility = View.GONE
+            }
+            REWRITE_PRESETS.forEach { preset ->
+                val option = label(preset.first, 11f, colorSub) {
+                    background = roundRect(colorReply, 12)
+                    setPadding(dp(8), dp(4), dp(8), dp(4))
+                    gravity = Gravity.CENTER
+                }
+                option.setOnClickListener {
+                    rewriteReply(index, r, body, head, preset.second, opts, s)
+                }
+                opts.addView(
+                    option,
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        .apply { rightMargin = dp(4) },
+                )
+            }
+            bodyBox.addView(
+                opts,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    .apply { topMargin = dp(4) },
+            )
+            edit.setOnClickListener {
+                opts.visibility = if (opts.visibility == View.VISIBLE) View.GONE else View.VISIBLE
             }
         }
         bodyBox.addView(
