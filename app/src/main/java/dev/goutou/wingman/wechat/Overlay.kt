@@ -26,6 +26,7 @@ import dev.goutou.wingman.config.RoleMsg
 import dev.goutou.wingman.llm.LlmClient
 import dev.goutou.wingman.llm.LlmException
 import dev.goutou.wingman.llm.Suggestion
+import dev.goutou.wingman.config.SELF_ROLE_KEY
 
 /** 每个微信 Activity 一个面板；面板自己判断「现在是不是聊天页」。 */
 internal object PanelRegistry {
@@ -42,7 +43,14 @@ internal object PanelRegistry {
 }
 
 /**
- * 聊天页顶部那张候选回复卡片。
+ * 聊天页右上角那个折叠按钮 ——「军师」。
+ *
+ * 默认只有一个小按钮，不挡消息；**点开**才是「风险判断 + 候选回复 + 刷新」那张卡片，
+ * 点标题栏的 ▾（或再点一次按钮）就收回去。以前是一张常驻的大卡片铺在消息列表顶上，
+ * 聊天时一直挡着最上面那几条 —— 这就是把它改成折叠的原因。
+ *
+ * 折叠按钮上的字会跟着状态走：没结果时「↻ 识别」、正在调接口「思考中…」、
+ * 有结果「风险低 · 3条」（底色也按低绿/中黄/高红变）。
  *
  * 和原版的区别：
  * - 不在 Activity.onResume 时一次性建面板，而是绑定生命周期（onPause 停轮询、摘掉视图，省电、也不会残留在后台任务里）。
@@ -92,8 +100,13 @@ internal class Panel(private val a: Activity) {
     private var cardTop = -1
     private var lastCallAt = 0L
     private var lastFingerprint = ""
-    private var dismissed = ""
     private var skipSensitiveFor = ""
+    /** 折叠 / 展开。默认折叠 —— 不打开的话，脸上就只有一个小按钮。 */
+    private var expanded = false
+    /** 卡片里现在是不是一份「能看的结果」（候选回复 / 敏感拦截）。不是的话，点按钮该去重新识别。 */
+    private var hasResult = false
+    /** 折叠按钮上的字，跟着状态走。 */
+    private var chipText = ""
 
     private var lastDiagAt = 0L
     private var lastDiagReq = 0L
@@ -137,6 +150,8 @@ internal class Panel(private val a: Activity) {
         busy = false
         onChat = false
         generation++
+        expanded = false
+        hasResult = false
         handler.removeCallbacks(ticker)
         card.visibility = View.GONE
         chip.visibility = View.GONE
@@ -170,27 +185,26 @@ internal class Panel(private val a: Activity) {
             setPadding(dp(10), dp(4), dp(10), dp(4))
         }
         refresh.setOnClickListener { regenerate() }
-        val close = label("✕", 14f, colorSub) { setPadding(dp(12), 0, 0, 0) }
-        close.setOnClickListener {
-            dismissed = lastFingerprint
-            showCard(false)
-        }
+        // 收起：只是折回小按钮，不拉黑这一条 —— 再点按钮随时能打开
+        val collapse = label("▾", 16f, colorSub) { setPadding(dp(12), 0, 0, 0) }
+        collapse.setOnClickListener { setExpanded(false) }
         head.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         head.addView(refresh)
-        head.addView(close)
+        head.addView(collapse)
 
         bodyBox.orientation = LinearLayout.VERTICAL
         card.addView(head)
         card.addView(bodyBox)
 
-        chip.text = "↻ 识别"
-        chip.textSize = 12f
+        chipText = "↻ 识别"
+        chip.text = chipText
+        chip.textSize = 13f
         chip.setTextColor(0xFFFFFFFF.toInt())
-        chip.setPadding(dp(12), dp(6), dp(12), dp(6))
-        chip.background = roundRect(0xE67C3AED.toInt(), 16)
+        chip.setPadding(dp(14), dp(8), dp(14), dp(8))
+        chip.background = roundRect(0xE67C3AED.toInt(), 18)
         chip.elevation = dp(6).toFloat()
         chip.visibility = View.GONE
-        chip.setOnClickListener { regenerate() }
+        chip.setOnClickListener { onChipClick() }
 
         decor.addView(card, matchTop(dp(10), dp(96), dp(10)))
         decor.addView(chip, wrapTopEnd(dp(10), dp(96)))
@@ -305,6 +319,9 @@ internal class Panel(private val a: Activity) {
             hideAll()
             return
         }
+        // 从别的页面切回来时，指纹没变会提前 return —— 这里先把按钮的可见性对一遍，
+        // 免得「出去转一圈回来，按钮再也不出现了」。
+        applyVisibility()
 
         val cachedList = listRef
         val list = if (cachedList != null && cachedList.isShown) {
@@ -335,10 +352,6 @@ internal class Panel(private val a: Activity) {
         if (!force && fingerprint == lastFingerprint) return
         force = false
         lastFingerprint = fingerprint
-        if (fingerprint == dismissed) {
-            showCard(false)
-            return
-        }
 
         val msgs = parser.parse(reader.snapshot(list)).takeLast(cfg.ctx)
 
@@ -353,7 +366,7 @@ internal class Panel(private val a: Activity) {
         }
 
         if (msgs.isEmpty()) {
-            // 原来这里只有一句 showCard(false)：卡片和小气泡一起消失，用户什么都看不到、也没有提示。
+            // 原来这里只是默默把卡片收掉：用户什么都看不到、也没有任何提示。
             // 现在第一次把话说清楚，并留下诊断。
             if (!emptyNotified) {
                 emptyNotified = true
@@ -364,7 +377,7 @@ internal class Panel(private val a: Activity) {
                     isError = true,
                 )
             } else {
-                showCard(false)
+                showIdle()
             }
             return
         }
@@ -384,9 +397,9 @@ internal class Panel(private val a: Activity) {
             )
             return
         }
-        // 最后一条是我发的：没什么可回的，收起来不打扰
+        // 最后一条是我发的：没什么可回的，收起卡片（按钮留在场上，点一下就是重新识别）
         if (msgs.last().fromMe) {
-            showCard(false)
+            showIdle()
             return
         }
         if (busy) return
@@ -404,7 +417,9 @@ internal class Panel(private val a: Activity) {
         }
 
         if (System.currentTimeMillis() - lastCallAt < cfg.minIntervalSec * 1000L) {
-            showMessage("刚分析过，${cfg.minIntervalSec}s 内不重复调用（可到「设置」调小）")
+            // 不弹卡片打断聊天，只在按钮上留个倒计时（「设置」里可以把这个间隔调小）
+            val left = (cfg.minIntervalSec * 1000L - (System.currentTimeMillis() - lastCallAt) + 999L) / 1000L
+            setChip("$left s 后可再识别")
             return
         }
         ask(cfg, msgs, fingerprint, roleContextFor(chatName, msgs))
@@ -436,16 +451,30 @@ internal class Panel(private val a: Activity) {
                     )
                 }
             }
-            if (chatName.isBlank()) return
             val now = System.currentTimeMillis()
             if (sentMsgs.size > 400) sentMsgs.clear()
             val fresh = ArrayList<Pair<String, RoleMsg>>()
-            for (m in msgs) {
-                if (m.attachment || m.text.isBlank()) continue
-                val key = (if (m.fromMe) "1" else "0") + "|" + m.text
-                if (!sentMsgs.add(key)) continue
-                fresh.add(chatName to RoleMsg(m.fromMe, m.text, now))
+
+            // ①「本人」这条线（可选开关）：只收我发出去的，而且和「现在聊的是谁」无关 ——
+            //    要提炼的是「我怎么说话」，跟对方是谁没关系。所以刻意排在认会话名**之前**：
+            //    认不出会话名的那些页面，我自己的话照样有效。开关关着就一条都不收。
+            if (prefs?.getBoolean(Keys.SELF_STYLE_ON, false) == true) {
+                for (m in msgs) {
+                    if (!m.fromMe || m.attachment || m.text.isBlank()) continue
+                    if (!sentMsgs.add("s|" + m.text)) continue
+                    fresh.add(SELF_ROLE_KEY to RoleMsg(true, m.text, now))
+                }
             }
+
+            // ② 按联系人归档：认不出会话名就整页跳过（宁可漏记也不能记错人）
+            if (chatName.isNotBlank()) {
+                for (m in msgs) {
+                    if (m.attachment || m.text.isBlank()) continue
+                    if (!sentMsgs.add((if (m.fromMe) "1" else "0") + "|" + m.text)) continue
+                    fresh.add(chatName to RoleMsg(m.fromMe, m.text, now))
+                }
+            }
+
             if (fresh.isEmpty()) return
             // 分批，别把广播的 extras 撑爆
             fresh.chunked(20).forEach { Heartbeat.send(a, 0, roles = Roles.encodeIncoming(it)) }
@@ -459,32 +488,59 @@ internal class Panel(private val a: Activity) {
      *
      * 当前屏幕上已经有的那几行不再重复带（否则同一句话会出现两遍，模型容易当成说了两次）。
      */
+    /**
+     * 拼「这次要带给模型的额外背景」。
+     *
+     * 两块内容：
+     * ①「我的说话风格」—— App 每天自动提炼的 skill（开了才有）。和当前聊的是谁无关，
+     *    但它决定「怎么说」；放在最前面，因为它管的是语气和用词，比关系描述更"贴脸"。
+     * ② 对方档案 —— TA 是你什么人 + 平时的关系 + 之前攒下的聊天记录（原来那套）。
+     *
+     * 当前屏幕上已经有的那几行不再重复带（否则同一句话会出现两遍，模型容易当成说了两次）。
+     */
     private fun roleContextFor(name: String, current: List<ChatMsg>): String? {
-        if (name.isBlank()) return null
-        val raw = try {
-            prefs?.getString(Keys.ROLES, "")
+        val p = prefs
+        // 说话风格：**开关关着就绝不注入**，哪怕以前生成过 —— 「关闭」就该是关闭。
+        // 关掉时 App 会把采集到的原始样本清掉，但已生成的那份留着，所以重新打开立刻就能用。
+        val style = try {
+            if (p != null && p.getBoolean(Keys.SELF_STYLE_ON, false)) {
+                p.getString(Keys.SELF_SKILL, "").orEmpty().trim()
+            } else {
+                ""
+            }
+        } catch (t: Throwable) {
+            ""
+        }
+        val role = if (name.isBlank()) null else try {
+            p?.getString(Keys.ROLES, "")?.takeIf { it.isNotBlank() }
+                ?.let { raw -> Roles.decode(raw).firstOrNull { it.key == name } }
         } catch (t: Throwable) {
             null
         }
-        if (raw.isNullOrBlank()) return null
-        val role = Roles.decode(raw).firstOrNull { it.key == name } ?: return null
-        if (role.relation.isBlank() && role.note.isBlank() && role.msgs.isEmpty()) return null
+        val hasRole = role != null &&
+            (role.relation.isNotBlank() || role.note.isNotBlank() || role.msgs.isNotEmpty())
+        if (style.isBlank() && !hasRole) return null
 
         val seen = current.map { (if (it.fromMe) "1" else "0") + "|" + it.text }.toHashSet()
-        val older = role.msgs
-            .filter { (if (it.fromMe) "1" else "0") + "|" + it.text !in seen }
-            .takeLast(20)
-
         return buildString {
-            append("【对方档案】微信名「").append(role.name).append('」')
-            if (role.relation.isNotBlank()) append("｜TA 是用户的：").append(role.relation)
-            append('\n')
-            if (role.note.isNotBlank()) append("【平时的关系】").append(role.note).append('\n')
-            if (older.isNotEmpty()) {
-                append("【更早的聊天记录（按时间顺序，本模块平时记录的）】\n")
-                older.forEach { append(if (it.fromMe) "我: " else "对方: ").append(it.text.take(60)).append('\n') }
+            if (style.isNotBlank()) {
+                append("【我的说话风格（由我自己发过的话自动提炼）】\n").append(style).append('\n')
+                append("候选回复要贴合这个说话风格：用词、语气、句子长短、标点与表情习惯都要像。\n")
             }
-            append("回复要符合以上关系；不确定的地方不要脑补。")
+            if (hasRole && role != null) {
+                append("【对方档案】微信名「").append(role.name).append('」')
+                if (role.relation.isNotBlank()) append("｜TA 是用户的：").append(role.relation)
+                append('\n')
+                if (role.note.isNotBlank()) append("【平时的关系】").append(role.note).append('\n')
+                val older = role.msgs
+                    .filter { (if (it.fromMe) "1" else "0") + "|" + it.text !in seen }
+                    .takeLast(20)
+                if (older.isNotEmpty()) {
+                    append("【更早的聊天记录（按时间顺序，本模块平时记录的）】\n")
+                    older.forEach { append(if (it.fromMe) "我: " else "对方: ").append(it.text.take(60)).append('\n') }
+                }
+                append("回复要符合以上关系；不确定的地方不要脑补。")
+            }
         }
     }
 
@@ -540,7 +596,8 @@ internal class Panel(private val a: Activity) {
             append("—— 面板状态 ——\n")
             append("running=$running attached=$attached onChat=$onChat busy=$busy force=$force\n")
             append("card=${vis(card)} isShown=${card.isShown} 挂在当前decor=${card.parent === decor}\n")
-            append("chip=${vis(chip)} isShown=${chip.isShown} 挂在当前decor=${chip.parent === decor}\n")
+            append("chip=${vis(chip)} isShown=${chip.isShown} 文本=「${chipText}」 挂在当前decor=${chip.parent === decor}\n")
+            append("折叠：expanded=$expanded hasResult=$hasResult\n")
             append("inputRef=${inputRef?.let { "${it.javaClass.simpleName} ${it.width}x${it.height} isShown=${it.isShown}" } ?: "null"}\n")
             append("listRef=${listRef?.let { "${it.javaClass.simpleName} ${it.width}x${it.height} 子=${it.childCount}" } ?: "null"}\n")
             append("noListTicks=$noListTicks emptyNotified=$emptyNotified\n")
@@ -618,7 +675,7 @@ internal class Panel(private val a: Activity) {
         busy = true
         lastCallAt = System.currentTimeMillis()
         val gen = ++generation
-        showMessage("TalkTact 思考中…")
+        showThinking()
         Thread {
             var suggestion: Suggestion? = null
             var tokens = 0
@@ -656,7 +713,6 @@ internal class Panel(private val a: Activity) {
 
     private fun regenerate() {
         cache.remove(lastFingerprint)
-        dismissed = ""
         lastCallAt = 0
         force = true
         handler.post {
@@ -667,6 +723,7 @@ internal class Panel(private val a: Activity) {
     // ---------------- 渲染 ----------------
 
     private fun render(s: Suggestion, msgs: List<ChatMsg>, fromCache: Boolean) {
+        hasResult = true
         title.text = "军师 · ${s.intent} · 风险${s.risk}" + if (fromCache) " · 缓存" else ""
         title.setTextColor(riskColor(s.risk))
         bodyBox.removeAllViews()
@@ -691,10 +748,13 @@ internal class Panel(private val a: Activity) {
             )
         }
         bodyBox.addView(label("点一下填入输入框 · 长按复制 · 本模块不会自动发送", 10f, colorSub) { setPadding(0, dp(6), 0, 0) })
-        showCard(true)
+        // 默认不打扰：只有你已经把卡片打开着，才把新结果摊在眼前；
+        // 折叠着的时候只更新按钮上的「风险 + 条数」，点一下才展开。
+        setChip("军师 · 风险${s.risk} · ${s.replies.size}条", chipColor(s.risk))
     }
 
     private fun renderSensitive(hits: List<String>) {
+        hasResult = true
         title.text = "⚠ 这条含敏感内容"
         title.setTextColor(colorWarn)
         bodyBox.removeAllViews()
@@ -711,25 +771,98 @@ internal class Panel(private val a: Activity) {
             handler.post { runCatching { tick() } }
         }
         bodyBox.addView(go, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
-        showCard(true)
+        // 这条要你亲自拍板「发不发」，所以直接摊开，不折叠
+        setChip("⚠ 敏感内容 · 点开看", 0xE6C97A00.toInt())
+        setExpanded(true)
     }
 
     private fun showMessage(message: String, isError: Boolean = false) {
+        hasResult = false
         title.text = if (isError) "生成失败" else "TalkTact"
         title.setTextColor(if (isError) colorBad else colorAccent)
         bodyBox.removeAllViews()
         bodyBox.addView(label(message, 13f, if (isError) colorBad else colorMain))
-        showCard(true)
+        // 出错和提示这类「你必须看一眼」的事，直接摊开，不折叠
+        setChip(
+            if (isError) "⚠ 军师出错 · 点开看" else "军师 · 点开看",
+            if (isError) 0xE6D64545.toInt() else 0xE67C3AED.toInt(),
+        )
+        setExpanded(true)
     }
 
-    private fun showCard(visible: Boolean) {
-        card.visibility = if (visible) View.VISIBLE else View.GONE
-        chip.visibility = if (!visible && onChat) View.VISIBLE else View.GONE
+    // ---------------- 折叠 / 展开 ----------------
+
+    /**
+     * 折叠态：聊天页右上角只有一个**按钮**。
+     * 展开态：才是「风险判断 + 候选回复 + 刷新」那张卡片。
+     *
+     * 为什么要折叠：卡片是铺在消息列表顶上的，聊天时一直挡着最上面那几条消息。
+     * 改成「不点开就只是个按钮」，想看了点开，看完一点就收回去，不打扰看消息。
+     */
+    private fun applyVisibility() {
+        card.visibility = if (expanded) View.VISIBLE else View.GONE
+        chip.visibility = if (!expanded && onChat) View.VISIBLE else View.GONE
+    }
+
+    private fun setExpanded(visible: Boolean) {
+        expanded = visible
+        applyVisibility()
+    }
+
+    /** 折叠按钮上的文案 + 底色（低绿 / 中黄 / 高红，一眼看出这条多危险）。 */
+    private fun setChip(text: String, color: Int = 0xE67C3AED.toInt()) {
+        chipText = text
+        chip.text = text
+        chip.background = roundRect(color, 18)
+        applyVisibility()
+    }
+
+    private fun chipColor(risk: String): Int = when (risk) {
+        "低" -> 0xE62FA566.toInt()
+        "中" -> 0xE6C97A00.toInt()
+        "高" -> 0xE6D64545.toInt()
+        else -> 0xE67C3AED.toInt()
+    }
+
+    /**
+     * 点按钮：开着就收起；有结果就打开；什么都没有就去识别一次。
+     *
+     * 正在调接口时不重新发请求 —— 那会把这一轮的结果丢掉，等于白烧一次 token；
+     * 这时点一下只是把卡片打开看进度。
+     */
+    private fun onChipClick() {
+        if (expanded) {
+            setExpanded(false)
+            return
+        }
+        if (busy || hasResult) {
+            setExpanded(true)
+            return
+        }
+        regenerate()
+    }
+
+    /** 这一屏没什么可展示的：收起卡片，按钮留在场上（点一下就是重新识别）。 */
+    private fun showIdle() {
+        hasResult = false
+        setExpanded(false)
+        setChip("↻ 识别")
+    }
+
+    /** 正在调接口：按钮上就能看出来，默认不摊开卡片打扰人（但展开着的那份也同步成进度）。 */
+    private fun showThinking() {
+        setChip("军师 · 思考中…")
+        title.text = "军师 · 思考中…"
+        title.setTextColor(colorAccent)
+        bodyBox.removeAllViews()
+        bodyBox.addView(label("正在读这一屏、调接口…", 13f, colorMain))
     }
 
     private fun hideAll() {
         onChat = false
         noListTicks = 0
+        expanded = false
+        hasResult = false
         card.visibility = View.GONE
         chip.visibility = View.GONE
     }
