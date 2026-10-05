@@ -6,13 +6,13 @@ plugins {
 
 android {
     namespace = "dev.goutou.wingman"
-    compileSdk = 34
+    compileSdk = 37
     defaultConfig {
         applicationId = "io.github.shibry88_netizen.talktact"
         minSdk = 31  // Android 12+：液态玻璃的真实背景模糊走 RenderEffect
         targetSdk = 34
-        versionCode = 24
-        versionName = "0.6.3"
+        versionCode = 25
+        versionName = "0.7.0"
     }
     /**
      * 固定签名。
@@ -46,7 +46,12 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
-    packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    packaging {
+        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        // 让 resources/ 下的 META-INF/xposed/* 原样进 APK —— 框架就是靠这三个文件认模块的，
+        // 少一个 LSPosed 就当它不是模块（列表里都不出现）
+        resources.merges += "META-INF/xposed/*"
+    }
 }
 
 dependencies {
@@ -58,7 +63,15 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.core:core-ktx:1.13.1")
-    compileOnly("de.robv.android.xposed:api:82")
+
+    // 现代 Xposed API（libxposed）。必须是 compileOnly：这些类由框架在运行时提供，
+    // 打进 APK 反而会和框架自己那份撞车。
+    compileOnly("io.github.libxposed:api:102.0.0")
+
+    // service 是「模块 App ↔ 框架」的那一侧：写入 remote preferences 走它。
+    // 必须是 implementation —— 它带一个 ContentProvider，运行时得真的存在。
+    // 代价是它的 AAR 声明了 minCompileSdk=37，所以上面的 compileSdk 必须跟到 37。
+    implementation("io.github.libxposed:service:102.0.0")
 
     testImplementation("junit:junit:4.13.2")
 }

@@ -1,8 +1,7 @@
 package dev.goutou.wingman.wechat
 
 import android.view.View
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
+import dev.goutou.wingman.XposedApi
 import java.util.WeakHashMap
 
 /**
@@ -78,17 +77,19 @@ internal object TextCapture {
             // 只认正文。setHint / setError / setContentDescription 存下来的不是聊天内容，
             // 一旦被当成正文，就会串进候选回复里（而且它们常常在 setText 之后被调用，会覆盖掉真正文）。
             if (m.name in SKIP_SETTERS) continue
+            val builder = XposedApi.hook(m) ?: continue
             try {
-                XposedBridge.hookMethod(
-                    m,
-                    object : XC_MethodHook() {
-                        override fun afterHookedMethod(param: MethodHookParam) {
-                            val self = param.thisObject as? View ?: return
-                            val text = param.args?.firstOrNull() as? CharSequence ?: return
-                            if (text.isNotEmpty()) store(self, text)
-                        }
-                    },
-                )
+                builder
+                    // 同 id 重复 hook 是原子替换，不会叠出第二个回调
+                    .setId("wingman.setText:" + m.toGenericString())
+                    .intercept { chain ->
+                        // 先让微信把文字真正设下去（等价于 legacy 的 afterHookedMethod）
+                        val result = chain.proceed()
+                        val self = chain.thisObject as? View
+                        val text = chain.getArg(0) as? CharSequence
+                        if (self != null && text != null && text.isNotEmpty()) store(self, text)
+                        result
+                    }
                 hookedAny = true
             } catch (t: Throwable) {
                 // 已经挂过 / 抽象方法 之类，忽略
@@ -96,7 +97,7 @@ internal object TextCapture {
         }
         if (hookedAny) {
             if (remember) pending.add(name)
-            XposedBridge.log("[Goutou] 已给 $name 挂上 setText 钩子")
+            XposedApi.log("已给 $name 挂上 setText 钩子")
         }
         return hookedAny
     }

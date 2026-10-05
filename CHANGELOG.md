@@ -1,5 +1,56 @@
 # 变更记录
 
+## v0.7.0
+
+**整体迁移到 libxposed Modern API 102（消除框架的「已废弃 API」警告）**
+
+### 为什么必须动
+
+LSPosed / Vector 会给 legacy 模块打一个「使用了已废弃或即将删除的功能」的警告。判定条件是：
+模块是 legacy（靠 AndroidManifest 里的 `xposedminversion` 声明身份）、且 `xposedminversion > 92`
+（或声明了 `xposedsharedprefs`）—— 这时框架会走「New XSharedPreferences」那套机制，
+而它依赖 hook 模块自身的 `ContextImpl`，正是被标记为即将删除的部分。
+官方给出的消除办法就是升级到 libxposed。
+
+所以这次是**换 API**，不是改配置：
+
+| 迁移前 | 迁移后 |
+|---|---|
+| `de.robv.android.xposed:api:82` + `xposedminversion=93` + `assets/xposed_init` | `io.github.libxposed:api:102.0.0` + `META-INF/xposed/{module.prop, java_init.list, scope.list}` |
+| 入口 `IXposedHookLoadPackage.handleLoadPackage` | 入口 `XposedModule.onPackageReady` |
+| `XC_MethodHook` 的 before/after | 拦截器链 `hook(..).intercept { chain -> chain.proceed() }` |
+| `XposedHelpers.findAndHookMethod` | 反射拿 `Executable` + `hook()` |
+| `XposedBridge.log` | `log(priority, tag, msg)` |
+| `XSharedPreferences` | `getRemotePreferences(group)` |
+
+### 配置通道（这次最容易踩坑的一处）
+
+`getRemotePreferences` 的数据**只存在框架自己的数据库里**，框架并不会去读模块的 `shared_prefs`
+—— 也就是说必须由 App 侧主动写进去。做法：
+
+- App 自己**仍然以本地 SharedPreferences 为准**（界面、导出/导入完全没动）；
+- 新增 `RemoteSync`：挂在 SharedPreferences 的变更监听上，任何一次改动都顺手镜像到框架，
+  服务重新连上时再补一次全量；
+- 注入侧改成读框架推过来的那一份：只读、且**实时更新**（框架是回调推送，不是一次性快照）。
+
+顺带解决一个老问题：以前靠「文件世界可读」让微信进程读到配置，而 Android 12+ 上
+`MODE_WORLD_READABLE` 本来就取不到；现在两边不再共享同一个文件，这条依赖彻底去掉。
+
+### 其他
+
+- 日志统一收口到 `XposedApi.log()`（tag 是 `TalkTact`，内容仍带 `[Goutou]` 前缀，照旧好 grep）。
+- hook 都带上 id（`wingman.activity.onResume` 等）：同 id 重复 hook 是**原子替换**，
+  不会叠出第二个回调 —— `TextCapture` 是「看到才挂钩子」的，这一点很重要。
+- 模块描述改用 `android:description`，模块名仍是 `android:label`。
+- 构建：AGP 8.5.2 → 8.12.0、Gradle 8.7 → 8.13、compileSdk 34 → 37
+  （libxposed api/service 102 的 AAR 声明了 `minCompileSdk=37`）。minSdk 31 / targetSdk 34 不变。
+- CI 增加一步产物自检：APK 里必须齐 `META-INF/xposed/` 三件套，且不得残留 `assets/xposed_init`。
+
+### 兼容性（重要）
+
+`module.prop` 里声明的是 `minApiVersion=102`，即**要求框架本身提供 API 102**。
+框架版本低于这个要求时，模块会显示为不兼容、根本不会加载 —— 遇到这种情况请先升级 LSPosed / Vector。
+
 ## v0.6.3
 
 **新增：角色可以改名字；识别不准的问题一并修**

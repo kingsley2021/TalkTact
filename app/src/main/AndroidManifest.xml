@@ -11,17 +11,24 @@
     <permission android:name="io.github.shibry88_netizen.talktact.permission.HEARTBEAT" android:protectionLevel="normal" />
     <uses-permission android:name="io.github.shibry88_netizen.talktact.permission.HEARTBEAT" />
 
+    <!--
+      现代 Xposed API：模块的身份不再靠下面那四个 meta-data 声明，而是靠 APK 里的
+      META-INF/xposed/{module.prop, java_init.list, scope.list}（见 src/main/resources）。
+      模块名 = android:label，描述 = android:description —— 这正是框架推荐的做法。
+
+      迁移前的写法（已删除）：
+        <meta-data android:name="xposedmodule" .../>        <meta-data android:name="xposeddescription" .../>
+        <meta-data android:name="xposedminversion" .../>    <meta-data android:name="xposedscope" .../>
+      再加上 assets/xposed_init。留着任何一条都会让框架按 legacy 模块处理。
+    -->
     <application
+        android:name=".TalkTactApp"
         android:label="TalkTact"
+        android:description="@string/module_description"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:allowBackup="false">
-        <meta-data android:name="xposedmodule" android:value="true" />
-        <meta-data android:name="xposeddescription"
-            android:value="TalkTact：微信聊天副驾。读聊天页最近几条消息，给 3 条策略不同的候选回复；可按联系人写关系档案影响生成。只填入输入框，不自动发送。" />
-        <meta-data android:name="xposedminversion" android:value="93" />
-        <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
 
         <activity
             android:name=".MainActivity"

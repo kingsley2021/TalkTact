@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      模块描述。现代 API 用 android:description 取代了 xposeddescription 元数据，
+      LSPosed 模块列表里显示的就是这一段。模块名走 android:label（见 AndroidManifest）。
+    -->
+    <string name="module_description">TalkTact：微信聊天副驾。读聊天页最近几条消息，给 3 条策略不同的候选回复；可按联系人写关系档案影响生成。只填入输入框，不自动发送。</string>
+</resources>

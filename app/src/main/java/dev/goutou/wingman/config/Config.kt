@@ -121,12 +121,15 @@ data class ConfigData(
  * 真正的解法是让 App 起一个本地代理、Key 不出 App 进程（见 IMPROVEMENTS.md 的路线图）。
  */
 class ConfigStore(context: Context) {
-    private val sp: SharedPreferences = try {
-        @Suppress("DEPRECATION")
-        context.getSharedPreferences(PREF_NAME, Context.MODE_WORLD_READABLE)
-    } catch (t: Throwable) {
+    /**
+     * 本地配置。它仍然是 App 侧唯一的事实来源（界面、导出导入都读它）。
+     *
+     * 迁移到现代 API 之后这里不再需要 MODE_WORLD_READABLE：以前靠它让注入进程（不同 UID）
+     * 能读这个 XML 文件，现在注入侧读的是框架推送的配置副本（见 RemoteSync），
+     * 两个进程之间不再需要共享同一个文件。
+     */
+    private val sp: SharedPreferences =
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-    }
 
     fun load(): ConfigData = ConfigData.from(sp)
 

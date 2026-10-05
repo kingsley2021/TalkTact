@@ -16,15 +16,13 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import de.robv.android.xposed.XSharedPreferences
-import de.robv.android.xposed.XposedBridge
+import android.content.SharedPreferences
+import dev.goutou.wingman.XposedApi
 import dev.goutou.wingman.Heartbeat
 import dev.goutou.wingman.config.ConfigData
 import dev.goutou.wingman.config.Keys
-import dev.goutou.wingman.config.MODULE_PKG
 import dev.goutou.wingman.config.Roles
 import dev.goutou.wingman.config.RoleMsg
-import dev.goutou.wingman.config.PREF_NAME
 import dev.goutou.wingman.llm.LlmClient
 import dev.goutou.wingman.llm.LlmException
 import dev.goutou.wingman.llm.Suggestion
@@ -58,7 +56,12 @@ internal class Panel(private val a: Activity) {
     private val reader = ViewReader(a)
     private val parser = ChatParser(a.resources.displayMetrics.widthPixels)
     private val handler = Handler(Looper.getMainLooper())
-    private val prefs = XSharedPreferences(MODULE_PKG, PREF_NAME)
+    /**
+     * 配置。注入进程里**只读**：App 侧写本地 SharedPreferences，框架把改动实时推到这里。
+     * （迁移前是 XSharedPreferences 直接读 App 的 XML —— 那套机制已被标记废弃。）
+     */
+    private val prefs: SharedPreferences?
+        get() = XposedApi.prefs()
 
     private val density = a.resources.displayMetrics.density
     private fun dp(v: Int) = (v * density).toInt()
@@ -101,7 +104,6 @@ internal class Panel(private val a: Activity) {
     private var lastAttachTry = 0L
     private var noListTicks = 0
     private var config: ConfigData? = null
-    private var prefsStamp = -1L
     private var inputRef: EditText? = null
     private var listRef: ViewGroup? = null
     private val cache = LinkedHashMap<String, Suggestion>()
@@ -112,7 +114,7 @@ internal class Panel(private val a: Activity) {
             try {
                 tick()
             } catch (t: Throwable) {
-                XposedBridge.log("[Goutou] tick: $t")
+                XposedApi.log("tick: $t")
             }
             handler.postDelayed(this, if (onChat) 900L else 2600L)
         }
@@ -122,7 +124,7 @@ internal class Panel(private val a: Activity) {
         try {
             if (!attached) attach()
         } catch (t: Throwable) {
-            XposedBridge.log("[Goutou] attach failed: $t")
+            XposedApi.log("attach failed: $t")
             return
         }
         running = true
@@ -260,7 +262,7 @@ internal class Panel(private val a: Activity) {
         // 刻意排在**所有**判定之前（包括 hasWindowFocus）：
         // 出问题的那几个聊天页可能是在下面任意一个分支提前 return 的，而诊断入口原本是长按卡片标题 ——
         // 卡片都不弹，那个入口根本够不着；连「窗口没焦点」这种原因也要能抓到证据。
-        val req = prefs.getLong(Keys.DIAG_REQ, 0L)
+        val req = prefs?.getLong(Keys.DIAG_REQ, 0L) ?: 0L
         if (req > lastDiagReq) {
             lastDiagReq = req
             val in0 = reader.findChatInput(decor)
@@ -448,7 +450,7 @@ internal class Panel(private val a: Activity) {
             // 分批，别把广播的 extras 撑爆
             fresh.chunked(20).forEach { Heartbeat.send(a, 0, roles = Roles.encodeIncoming(it)) }
         } catch (t: Throwable) {
-            XposedBridge.log("[Goutou] record: $t")
+            XposedApi.log("record: $t")
         }
     }
 
@@ -460,7 +462,7 @@ internal class Panel(private val a: Activity) {
     private fun roleContextFor(name: String, current: List<ChatMsg>): String? {
         if (name.isBlank()) return null
         val raw = try {
-            prefs.getString(Keys.ROLES, "")
+            prefs?.getString(Keys.ROLES, "")
         } catch (t: Throwable) {
             null
         }
@@ -491,7 +493,7 @@ internal class Panel(private val a: Activity) {
         try {
             val adapter = list.javaClass.getMethod("getAdapter").invoke(list) ?: return
             adapter.javaClass.getMethod("notifyDataSetChanged").invoke(adapter)
-            XposedBridge.log("[Goutou] 已请求列表重新绑定（好让 setText 钩子抓到原文）")
+            XposedApi.log("已请求列表重新绑定（好让 setText 钩子抓到原文）")
         } catch (t: Throwable) {
             // 不是 RecyclerView 就算了；下次滚动/新消息时会自然重新绑定
         }
@@ -514,10 +516,10 @@ internal class Panel(private val a: Activity) {
                 if (!extra.isNullOrBlank()) append(extra).append('\n')
                 append(reader.diagnose(decor, list, input))
             }
-            XposedBridge.log("[Goutou] $diag")
+            XposedApi.log("$diag")
             Heartbeat.send(a, 0, diag)
         } catch (t: Throwable) {
-            XposedBridge.log("[Goutou] 生成诊断失败: $t")
+            XposedApi.log("生成诊断失败: $t")
         }
     }
 
@@ -572,7 +574,7 @@ internal class Panel(private val a: Activity) {
         val now = System.currentTimeMillis()
         if (now - lastAttachTry < 3_000L) return
         lastAttachTry = now
-        XposedBridge.log("[Goutou] decor 变了，重新挂卡片（card.parent=${card.parent}）")
+        XposedApi.log("decor 变了，重新挂卡片（card.parent=${card.parent}）")
         runCatching { (card.parent as? ViewGroup)?.removeView(card) }
         runCatching { (chip.parent as? ViewGroup)?.removeView(chip) }
         runCatching { card.removeAllViews() }
@@ -581,25 +583,24 @@ internal class Panel(private val a: Activity) {
     }
 
     /**
-     * 配置文件变了就地重读 —— App 侧的任何改动（含「手动抓取」请求）都靠它生效。
-     * 只比对文件 mtime，没变就不动，所以每个 tick 调都没代价。
+     * 配置每 tick 重读。
+     *
+     * 迁移前靠「比对文件 mtime + reload()」才敢重读 —— 因为读的是磁盘上的 XML，
+     * 中间隔着一层。现在配置由框架直接推到本进程的内存里，读到的永远是最新值，
+     * 既没有文件也没有 reload()，所以直接重建一份 ConfigData 就行
+     * （对象很小，900ms 重建一次无所谓）。
      */
     private fun refreshPrefs() {
         try {
-            if (!prefs.file.canRead()) return
-            val stamp = prefs.file.lastModified()
-            if (stamp != prefsStamp) {
-                prefs.reload()
-                prefsStamp = stamp
-                config = ConfigData.from(prefs)
-            }
+            val p = prefs ?: return
+            config = ConfigData.from(p)
         } catch (t: Throwable) {
-            XposedBridge.log("[Goutou] prefs: $t")
+            XposedApi.log("prefs: $t")
         }
     }
 
     private fun reloadConfig(): Boolean {
-        if (!prefs.file.canRead()) {
+        if (prefs == null) {
             showMessage("读不到配置：确认模块已在 LSPosed 启用并勾选了微信，然后强杀微信重开")
             return false
         }
@@ -607,7 +608,7 @@ internal class Panel(private val a: Activity) {
             refreshPrefs()
             true
         } catch (t: Throwable) {
-            XposedBridge.log("[Goutou] prefs: $t")
+            XposedApi.log("prefs: $t")
             showMessage("配置读取异常：${t.message}")
             false
         }
@@ -659,7 +660,7 @@ internal class Panel(private val a: Activity) {
         lastCallAt = 0
         force = true
         handler.post {
-            runCatching { tick() }.onFailure { XposedBridge.log("[Goutou] refresh: $it") }
+            runCatching { tick() }.onFailure { XposedApi.log("refresh: $it") }
         }
     }
 
@@ -758,7 +759,7 @@ internal class Panel(private val a: Activity) {
             title.text = "已填入 · 按发送即可"
             toast("已填入输入框")
         } catch (t: Throwable) {
-            XposedBridge.log("[Goutou] fill: $t")
+            XposedApi.log("fill: $t")
         }
     }
 
@@ -768,7 +769,7 @@ internal class Panel(private val a: Activity) {
             cm.setPrimaryClip(ClipData.newPlainText("goutou", text))
             toast("已复制")
         } catch (t: Throwable) {
-            XposedBridge.log("[Goutou] copy: $t")
+            XposedApi.log("copy: $t")
         }
     }
 
