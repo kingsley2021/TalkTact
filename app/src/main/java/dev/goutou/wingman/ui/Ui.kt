@@ -1,5 +1,6 @@
 package dev.goutou.wingman.ui
 
+import android.app.ActivityManager
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.graphics.RenderEffect
@@ -212,6 +213,22 @@ private class GlassPhase {
 private val LocalGlassPhase = staticCompositionLocalOf { GlassPhase() }
 
 /**
+ * 当前生效的玻璃档位（折射 / 模糊 / 扫光 各开不开）。
+ *
+ * 由 [App] 按「设置里的选择 + 设备能力」算一次后提供；玻璃面板只读它，不各自去问系统 ——
+ * 读 `isLowRamDevice` 有成本，而且设置页要能显示「自动 = 实际判成了哪一档」。
+ */
+val LocalGlassQuality = staticCompositionLocalOf { GlassQuality.HIGH }
+
+/**
+ * 低内存设备（`ActivityManager.isLowRamDevice`）。拿不到就按「不是」处理 ——
+ * 宁可多开点效果，也别因为一个查询失败把所有人降级。
+ */
+internal fun isLowRamDevice(context: Context): Boolean = runCatching {
+    (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).isLowRamDevice
+}.getOrDefault(false)
+
+/**
  * 一支 AGSL 折射着色器（对应 liquidGL 的 refraction + aberration + bevel）。
  *
  * 只说一句实话：这是整次改造里**唯一没法在这儿验证**的部分 —— 着色器是运行时编译的，
@@ -358,8 +375,10 @@ private const val GLASS_SWEEP_MIN_FRAME_MS = 32L
 fun BackgroundLayer(backdrop: Backdrop) {
     val root = LocalRootSize.current
     val phase = LocalGlassPhase.current
+    val quality = LocalGlassQuality.current
 
-    if (GLASS_SWEEP_ENABLED) {
+    // 低档位连相位都不推：省掉每帧的动画开销
+    if (GLASS_SWEEP_ENABLED && quality != GlassQuality.LOW) {
         LaunchedEffect(Unit) {
             var last = 0L
             while (true) {
@@ -444,6 +463,7 @@ fun GlassSurface(
     val backdrop = LocalBackdrop.current
     val root = LocalRootSize.current
     val phase = LocalGlassPhase.current
+    val quality = LocalGlassQuality.current
     var pos by remember { mutableStateOf(Offset.Zero) }
     // 面板自身的像素尺寸：折射着色器要按它算 SDF 和折射位移。
     // 用布局实测值而不是 graphicsLayer 作用域里的 size —— 后者的类型随版本变，
@@ -452,10 +472,11 @@ fun GlassSurface(
     val top = tintTop ?: (palette.glassTopAlpha * glassAlpha)
     val bottom = tintBottom ?: (palette.glassBottomAlpha * glassAlpha)
     val sized = root.width > 0 && root.height > 0
-    val hasImage = sized && backdrop.bitmap != null && backdrop.blur > 0.dp
+    // 低档位连模糊都不做，只留半透明染色（弱机上 RenderEffect 的离屏模糊很贵）
+    val hasImage = sized && backdrop.bitmap != null && backdrop.blur > 0.dp && quality != GlassQuality.LOW
     val glass = remember { AgslGlass() }
-    // 折射只在「背景里有东西可折」时才做 —— 现在背景永远是一张图，所以就是 hasImage
-    val wantsRefraction = refract && hasImage
+    // 折射只在「背景里有东西可折 + 设备撑得住」时才做
+    val wantsRefraction = refract && hasImage && quality == GlassQuality.HIGH
 
     Box(
         modifier
@@ -503,7 +524,7 @@ fun GlassSurface(
         )
         // ③ 镜面扫光（liquidGL 的 specular）：一道很淡的斜光缓缓扫过。
         //    相位由 BackgroundLayer 推，所以不需要额外动画驱动；只在 draw 阶段读，不触发重组。
-        if (GLASS_SWEEP_ENABLED) {
+        if (GLASS_SWEEP_ENABLED && quality != GlassQuality.LOW) {
             Spacer(
                 Modifier.matchParentSize().drawBehind {
                     val p = (phase.phase * 2f) % 1f
@@ -718,6 +739,12 @@ fun App(store: ConfigStore) {
     // 只关心「影响外观」的那几个字段：玻璃透明度/模糊、背景
     var ui by remember { mutableStateOf(store.load()) }
     val health = healthOf(store)
+    // 设备能力只问一次：isLowRamDevice 有成本，运行中也不会变
+    val context = LocalContext.current
+    val lowRam = remember { isLowRamDevice(context) }
+    val glassQuality = remember(ui.glassQuality) {
+        decideGlassQuality(ui.glassQuality, lowRam, Build.VERSION.SDK_INT)
+    }
 
     GoutouTheme {
         val palette = LocalPalette.current
@@ -736,6 +763,7 @@ fun App(store: ConfigStore) {
             LocalBackdrop provides backdrop,
             LocalRootSize provides rootSize,
             LocalGlassPhase provides phase,
+            LocalGlassQuality provides glassQuality,
         ) {
             var contentAlpha by remember { mutableStateOf(0f) }
             LaunchedEffect(tab) {

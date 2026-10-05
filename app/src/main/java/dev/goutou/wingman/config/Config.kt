@@ -64,10 +64,21 @@ object Keys {
     const val BASE2 = "base_url_2"
     const val KEY2 = "api_key_2"
     const val MODEL2 = "model_2"
+    /** 玻璃效果档位：auto / high / low（见 ui/GlassQuality.kt） */
+    const val GLASS_QUALITY = "glass_quality"
 }
 
 /** 默认几点跑。 */
 const val DEFAULT_SELF_STYLE_HOUR = 12
+
+/** 玻璃效果：自动（按设备能力判断）。 */
+const val GLASS_QUALITY_AUTO = "auto"
+
+/** 玻璃效果：高（折射 + 模糊 + 扫光全开）。 */
+const val GLASS_QUALITY_HIGH = "high"
+
+/** 玻璃效果：低（只留半透明，最省电）。 */
+const val GLASS_QUALITY_LOW = "low"
 
 data class ConfigData(
     val baseUrl: String = DEFAULT_BASE,
@@ -117,6 +128,11 @@ data class ConfigData(
     val baseUrl2: String = "",
     val apiKey2: String = "",
     val model2: String = "",
+    /**
+     * 玻璃效果档位：auto（默认，按设备能力）/ high（全开）/ low（省电）。
+     * 判定见 ui/GlassQuality.kt —— 手动选择永远优先于自动判断。
+     */
+    val glassQuality: String = GLASS_QUALITY_AUTO,
 ) {
     /**
      * 分级模式下「风险评估」那一路要用的接口。
@@ -168,6 +184,7 @@ data class ConfigData(
             baseUrl2 = p.getString(Keys.BASE2, "").orEmpty(),
             apiKey2 = p.getString(Keys.KEY2, "").orEmpty(),
             model2 = p.getString(Keys.MODEL2, "").orEmpty(),
+            glassQuality = p.getString(Keys.GLASS_QUALITY, GLASS_QUALITY_AUTO).orEmpty().ifBlank { GLASS_QUALITY_AUTO },
         )
 
     }
@@ -216,6 +233,7 @@ class ConfigStore(context: Context) {
             .putString(Keys.BASE2, d.baseUrl2.trim())
             .putString(Keys.KEY2, d.apiKey2.trim())
             .putString(Keys.MODEL2, d.model2.trim())
+            .putString(Keys.GLASS_QUALITY, d.glassQuality)
             .apply()
     }
 

@@ -66,9 +66,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.os.Build
 import dev.goutou.wingman.config.ConfigData
 import dev.goutou.wingman.config.Backup
 import dev.goutou.wingman.config.ConfigStore
+import dev.goutou.wingman.config.GLASS_QUALITY_AUTO
+import dev.goutou.wingman.config.GLASS_QUALITY_HIGH
+import dev.goutou.wingman.config.GLASS_QUALITY_LOW
 import dev.goutou.wingman.config.Role
 import dev.goutou.wingman.llm.BUILT_IN_SKILLS
 import dev.goutou.wingman.llm.Geo
@@ -940,6 +944,27 @@ fun SettingsScreen(
             Spacer(Modifier.height(4.dp))
             Text("背景压暗：${(d.bgDim * 100).toInt()}%", fontSize = 12.sp, color = palette.sub)
             Slider(value = d.bgDim, onValueChange = { update(d.copy(bgDim = it)) }, valueRange = 0f..0.8f)
+            Spacer(Modifier.height(4.dp))
+            // 设备分级：把「自动」实际判成了哪一档直接写出来，省得猜为什么效果不一样
+            val lowRamDevice = remember { isLowRamDevice(context) }
+            val effectiveQuality = decideGlassQuality(d.glassQuality, lowRamDevice, Build.VERSION.SDK_INT)
+            Text(
+                "玻璃效果：${glassQualityLabel(effectiveQuality)}" +
+                    if (d.glassQuality == GLASS_QUALITY_AUTO) "　（自动判定）" else "　（手动选的）",
+                fontSize = 12.sp,
+                color = palette.sub,
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                GlassPill("自动", d.glassQuality == GLASS_QUALITY_AUTO, Modifier.weight(1f)) {
+                    update(d.copy(glassQuality = GLASS_QUALITY_AUTO))
+                }
+                GlassPill("高（全开）", d.glassQuality == GLASS_QUALITY_HIGH, Modifier.weight(1f)) {
+                    update(d.copy(glassQuality = GLASS_QUALITY_HIGH))
+                }
+                GlassPill("低（省电）", d.glassQuality == GLASS_QUALITY_LOW, Modifier.weight(1f)) {
+                    update(d.copy(glassQuality = GLASS_QUALITY_LOW))
+                }
+            }
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
