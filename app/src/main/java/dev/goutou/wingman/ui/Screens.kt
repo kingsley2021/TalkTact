@@ -3,6 +3,13 @@ package dev.goutou.wingman.ui
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -27,9 +34,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -45,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -103,26 +114,60 @@ private fun CheckRow(check: Check, glassAlpha: Float) {
     }
 }
 
+/**
+ * 「详细状态」的折叠开关。
+ *
+ * 顶上那张「全部就绪」卡片保持原样不动，7 项明细收在这一行下面 ——
+ * 不点开就只占一行，点一下才铺出来。
+ */
+@Composable
+private fun DetailToggle(
+    expanded: Boolean,
+    summary: String,
+    glassAlpha: Float,
+    onClick: () -> Unit,
+) {
+    val palette = LocalPalette.current
+    val angle by animateFloatAsState(if (expanded) 180f else 0f, tween(180))
+    GlassSurface(
+        shape = RoundedCornerShape(16.dp),
+        glassAlpha = glassAlpha,
+        tintTop = 0.26f * glassAlpha,
+        tintBottom = 0.18f * glassAlpha,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+        onClick = onClick,
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("详细状态", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text(summary, fontSize = 12.sp, color = palette.sub)
+            }
+            Icon(
+                Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = palette.sub,
+                modifier = Modifier.rotate(angle),
+            )
+        }
+    }
+}
+
 // ================= 运行状态 =================
 
 @Composable
 fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
     val palette = LocalPalette.current
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
     var tick by remember { mutableStateOf(0) }
     var cfg by remember { mutableStateOf(store.load()) }
     val usage = remember(tick) { store.usage() }
     val beat = remember(tick) { store.heartbeatAt() }
-    val diag = remember(tick) { store.diag() }
-    val diagAt = remember(tick) { store.diagAt() }
-    val lastCall = remember(tick) { store.lastCall() }
-    val lastCallAt = remember(tick) { store.lastCallAt() }
     var probeResult by remember { mutableStateOf<String?>(null) }
     var probeOk by remember { mutableStateOf(false) }
     var probing by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf(0) }
-    var diagAsked by remember { mutableStateOf(false) }
+    /** 「详细状态」展开了没有。默认收起：这一页只需要一眼看健康。 */
+    var detail by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val glass = cfg.glassAlpha
     val active = moduleActive(store)
@@ -241,6 +286,33 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
             }
         }
         item {
+            Column {
+                // 原来那 7 项明细是直接铺在页面上的，把这一页撑得很长；现在收在折叠菜单里
+                DetailToggle(
+                    expanded = detail,
+                    summary = "${checks.size} 项：通过 $ok · 待确认 $warn · 有问题 $bad",
+                    glassAlpha = glass,
+                ) { detail = !detail }
+                AnimatedVisibility(
+                    visible = detail,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut(),
+                ) {
+                    Column {
+                        GlassCard(glass) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                GlassPill("全部 ${checks.size}", filter == 0, Modifier.weight(1f)) { filter = 0 }
+                                GlassPill("有问题 $bad", filter == 1, Modifier.weight(1f)) { filter = 1 }
+                                GlassPill("待确认 $warn", filter == 2, Modifier.weight(1f)) { filter = 2 }
+                                GlassPill("通过 $ok", filter == 3, Modifier.weight(1f)) { filter = 3 }
+                            }
+                        }
+                        shown.forEach { CheckRow(it, glass) }
+                    }
+                }
+            }
+        }
+        item {
             GlassCard(glass) {
                 Text("接口自检", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
                 Text("真发一次最小请求，验证地址、Key、模型名（会消耗几个 token）。", fontSize = 12.sp, color = palette.sub)
@@ -278,74 +350,6 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                 }
             }
         }
-        item {
-            GlassCard(glass) {
-                Text("抓取微信界面", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
-                Text(
-                    "某些聊天页连卡片都不弹时用这个：先在微信里停在那个聊天页 → 切回这里点下面的按钮 → " +
-                        "再切回微信（那个页面重新出现就会自动抓）→ 回来点「刷新」→ 复制下面的「诊断」发我。",
-                    fontSize = 12.sp,
-                    color = palette.sub,
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = { store.requestDiag(); diagAsked = true },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-                    ) { Text("抓当前微信界面") }
-                    if (diagAsked) {
-                        Text("已排队，切回微信那一页即抓", fontSize = 12.sp, color = palette.ok)
-                    }
-                }
-            }
-        }
-        if (diag.isNotBlank()) {
-            item {
-                GlassCard(glass, border = palette.warn.copy(alpha = 0.5f)) {
-                    Text("诊断（来自微信进程）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
-                    Text("生成于 ${formatTime(diagAt)} · 排查「读不到消息 / 全是图片」时把它复制给对方", fontSize = 12.sp, color = palette.sub)
-                    Spacer(Modifier.height(8.dp))
-                    Text(diag, fontSize = 10.sp, color = palette.text)
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { clipboard.setText(AnnotatedString(diag)) },
-                        shape = RoundedCornerShape(14.dp),
-                    ) { Text("复制诊断") }
-                }
-            }
-        }
-        if (lastCall.isNotBlank()) {
-            item {
-                GlassCard(glass, border = palette.primary.copy(alpha = 0.45f)) {
-                    Text("最近一次调用（注入侧真正发出去的）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
-                    Text(
-                        "发生于 ${formatTime(lastCallAt)} · 这里是微信进程实际拿去调接口的那一份，不是本 App 里的配置。" +
-                            "核对「当前军师」有没有真的生效，看 system 长度那一行。",
-                        fontSize = 12.sp,
-                        color = palette.sub,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(lastCall, fontSize = 10.sp, color = palette.text)
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { clipboard.setText(AnnotatedString(lastCall)) },
-                        shape = RoundedCornerShape(14.dp),
-                    ) { Text("复制这一段") }
-                }
-            }
-        }
-        item {
-            GlassCard(glass) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    GlassPill("全部 ${checks.size}", filter == 0, Modifier.weight(1f)) { filter = 0 }
-                    GlassPill("有问题 $bad", filter == 1, Modifier.weight(1f)) { filter = 1 }
-                    GlassPill("待确认 $warn", filter == 2, Modifier.weight(1f)) { filter = 2 }
-                    GlassPill("通过 $ok", filter == 3, Modifier.weight(1f)) { filter = 3 }
-                }
-            }
-        }
-        items(shown) { CheckRow(it, glass) }
     }
 }
 
@@ -650,6 +654,7 @@ fun SettingsScreen(
     ui: ConfigData,
     onUi: (ConfigData) -> Unit,
     onSaved: () -> Unit,
+    onOpenDiag: () -> Unit,
 ) {
     val palette = LocalPalette.current
     val context = LocalContext.current
@@ -890,6 +895,23 @@ fun SettingsScreen(
         }
 
         GlassCard(d.glassAlpha) {
+            Text("诊断", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text(
+                "某个聊天页连按钮都不弹、或者「运行状态」报错的时候用这里：\n" +
+                    "让微信进程抓一次当前界面、看它真正发出去的那次调用，再复制出来发我。",
+                fontSize = 12.sp,
+                color = palette.sub,
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onOpenDiag,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+            ) { Text("进入诊断") }
+        }
+
+        GlassCard(d.glassAlpha) {
             Text("关于", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = palette.text)
             Spacer(Modifier.height(6.dp))
             Text("版本：${appVersion(context)}", fontSize = 12.sp, color = palette.text)
@@ -902,6 +924,102 @@ fun SettingsScreen(
                 fontSize = 12.sp,
                 color = palette.sub,
             )
+        }
+    }
+}
+
+// ================= 诊断（设置 → 二级页） =================
+
+/**
+ * 设置 → 诊断。
+ *
+ * 这三块原来是挤在「运行状态」页上的（抓取界面 / 微信进程的诊断 / 最后一次调用），
+ * 把那一页撑得很长，而且它们都是「出问题了才看」的东西，所以搬进这个二级页。
+ * 运行状态页留下的，是「一眼看健康」的那部分。
+ */
+@Composable
+fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
+    val palette = LocalPalette.current
+    val clipboard = LocalClipboardManager.current
+    var tick by remember { mutableStateOf(0) }
+    var diagAsked by remember { mutableStateOf(false) }
+    val diag = remember(tick) { store.diag() }
+    val diagAt = remember(tick) { store.diagAt() }
+    val lastCall = remember(tick) { store.lastCall() }
+    val lastCallAt = remember(tick) { store.lastCallAt() }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
+        ScreenHeader("诊断", "抓界面 · 看调用 · 复制发我") {
+            TextButton(onClick = { tick++ }) { Text("刷新") }
+            TextButton(onClick = onBack) { Text("返回") }
+        }
+
+        GlassCard(glassAlpha) {
+            Text("抓取微信界面", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text(
+                "某些聊天页连卡片都不弹时用这个：先在微信里停在那个聊天页 → 切回这里点下面的按钮 → " +
+                    "再切回微信（那个页面重新出现就会自动抓）→ 回来点「刷新」→ 复制下面的「诊断」发我。",
+                fontSize = 12.sp,
+                color = palette.sub,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = { store.requestDiag(); diagAsked = true },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                ) { Text("抓当前微信界面") }
+                if (diagAsked) {
+                    Text("已排队，切回微信那一页即抓", fontSize = 12.sp, color = palette.ok)
+                }
+            }
+        }
+
+        if (diag.isNotBlank()) {
+            GlassCard(glassAlpha, border = palette.warn.copy(alpha = 0.5f)) {
+                Text("诊断（来自微信进程）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text(
+                    "生成于 ${formatTime(diagAt)} · 排查「读不到消息 / 全是图片」时把它复制给对方",
+                    fontSize = 12.sp,
+                    color = palette.sub,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(diag, fontSize = 10.sp, color = palette.text)
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { clipboard.setText(AnnotatedString(diag)) },
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text("复制诊断") }
+            }
+        } else {
+            GlassCard(glassAlpha) {
+                Text("还没有诊断", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("上面那个按钮抓过一次之后，微信进程会把界面结构留在这里。", fontSize = 12.sp, color = palette.sub)
+            }
+        }
+
+        if (lastCall.isNotBlank()) {
+            GlassCard(glassAlpha, border = palette.primary.copy(alpha = 0.45f)) {
+                Text("最近一次调用（注入侧真正发出去的）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text(
+                    "发生于 ${formatTime(lastCallAt)} · 这里是微信进程实际拿去调接口的那一份，不是本 App 里的配置。" +
+                        "核对「当前军师」有没有真的生效，看 system 长度那一行。",
+                    fontSize = 12.sp,
+                    color = palette.sub,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(lastCall, fontSize = 10.sp, color = palette.text)
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { clipboard.setText(AnnotatedString(lastCall)) },
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text("复制这一段") }
+            }
+        } else {
+            GlassCard(glassAlpha) {
+                Text("还没有调用记录", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("在微信里生成过一次候选回复之后，那份请求就会留在这里。", fontSize = 12.sp, color = palette.sub)
+            }
         }
     }
 }

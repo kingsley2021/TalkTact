@@ -713,6 +713,8 @@ fun App(store: ConfigStore) {
     var tab by remember { mutableIntStateOf(0) }
     // 「角色」的二级页（打开了某个人）也放在这一层：切走 tab 再回来时能回到原位
     var roleOpen by remember { mutableStateOf<String?>(null) }
+    // 「设置 → 诊断」的二级页，同理
+    var diagOpen by remember { mutableStateOf(false) }
     // 只关心「影响外观」的那几个字段：玻璃透明度/模糊、背景
     var ui by remember { mutableStateOf(store.load()) }
     val health = healthOf(store)
@@ -760,12 +762,17 @@ fun App(store: ConfigStore) {
                         1 -> TrialScreen(store, ui.glassAlpha)
                         2 -> MentorScreen(store, ui.glassAlpha) { ui = store.load() }
                         3 -> RolesScreen(store, ui.glassAlpha, roleOpen) { roleOpen = it }
-                        else -> SettingsScreen(
-                            store = store,
-                            ui = ui,
-                            onUi = { ui = it },
-                            onSaved = { ui = store.load() },
-                        )
+                        else -> if (diagOpen) {
+                            DiagScreen(store, ui.glassAlpha) { diagOpen = false }
+                        } else {
+                            SettingsScreen(
+                                store = store,
+                                ui = ui,
+                                onUi = { ui = it },
+                                onSaved = { ui = store.load() },
+                                onOpenDiag = { diagOpen = true },
+                            )
+                        }
                     }
                 }
                 NavBar(
@@ -774,7 +781,10 @@ fun App(store: ConfigStore) {
                     glassAlpha = ui.glassAlpha,
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(14.dp),
                 ) { next ->
-                    if (next != 3) roleOpen = null
+                    // 离开这一栏就把二级页收掉：切走再回来应该回到列表，而不是停在上次那个二级页；
+                    // 点自己这一栏也当成「退出二级页」。
+                    if (next != 3 || next == tab) roleOpen = null
+                    if (next != 4 || next == tab) diagOpen = false
                     tab = next
                 }
             }

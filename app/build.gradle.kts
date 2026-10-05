@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.shibry88_netizen.talktact"
         minSdk = 31  // Android 12+：液态玻璃的真实背景模糊走 RenderEffect
         targetSdk = 34
-        versionCode = 30
-        versionName = "0.8.3"
+        versionCode = 31
+        versionName = "0.8.4"
     }
     /**
      * 固定签名。
@@ -61,6 +61,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    // 折叠菜单的展开/收起动画（AnimatedVisibility）。material3/foundation 一般会把它带进来，
+    // 但那是传递依赖，说不准哪天就没了 —— 这里显式写一条，版本仍由上面的 BOM 管。
+    implementation("androidx.compose.animation:animation")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.core:core-ktx:1.13.1")
 
