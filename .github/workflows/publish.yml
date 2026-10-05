@@ -32,7 +32,9 @@ jobs:
           SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
           echo "sdkmanager: $SDKMANAGER"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
-          "$SDKMANAGER" --install "platforms;android-37"
+          # API 37 是「带次版本号」的平台（Android 16 起引入 minor SDK），
+          # 没有名为 android-37 的包，只有 android-37.0 / .1 / .2
+          "$SDKMANAGER" --install "platforms;android-37.0" "platforms;android-37.1"
           ls "$ANDROID_HOME/platforms"
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: 8.13 }
