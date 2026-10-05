@@ -274,6 +274,11 @@ class ConfigStore(context: Context) {
         saveRoles(Roles.rename(roles(), key, newName))
     }
 
+    /** 把 [from] 这个角色的记录并到 [to] 上（同一个人被记成了两个名字时，手动合并）。 */
+    fun mergeRoles(from: String, to: String) {
+        saveRoles(Roles.mergeTwo(roles(), from, to))
+    }
+
     fun removeRole(key: String) {
         saveRoles(roles().filterNot { it.key == key })
     }

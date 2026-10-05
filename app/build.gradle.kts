@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.shibry88_netizen.talktact"
         minSdk = 31  // Android 12+：液态玻璃的真实背景模糊走 RenderEffect
         targetSdk = 34
-        versionCode = 33
-        versionName = "0.8.6"
+        versionCode = 34
+        versionName = "0.8.7"
     }
     /**
      * 固定签名。

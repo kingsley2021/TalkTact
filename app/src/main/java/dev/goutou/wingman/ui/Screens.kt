@@ -17,6 +17,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -96,6 +97,49 @@ private data class Check(val title: String, val desc: String, val level: Level, 
  * 以前这两个动作是纯文字（TextButton），看着像标题的一部分、点起来也没有「按钮」的反馈；
  * 现在统一给它们一个描边框 —— 一眼能看出是能点的东西。
  */
+/**
+ * 会折叠的玻璃卡片：标题行一直在（带一行「现在是什么」的摘要），点一下才展开内容。
+ *
+ * 和「运行状态」页那个 [DetailToggle] 是同一套观感，区别是这里直接包成一张卡片 ——
+ * 页面上那些「配一次就不常看」的大块内容用它，页面能短一大截。
+ */
+@Composable
+private fun FoldCard(
+    title: String,
+    summary: String,
+    expanded: Boolean,
+    glassAlpha: Float,
+    onToggle: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val palette = LocalPalette.current
+    val angle by animateFloatAsState(if (expanded) 180f else 0f, tween(180))
+    GlassCard(glassAlpha) {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onToggle),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text(summary, fontSize = 12.sp, color = palette.sub)
+            }
+            Icon(
+                Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = palette.sub,
+                modifier = Modifier.rotate(angle),
+            )
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            Column { content() }
+        }
+    }
+}
+
 /** 一行「标题 + 值」的网络信息。值取不到就显示 null —— 不编。 */
 @Composable
 private fun NetRow(label: String, value: String?, hint: String? = null) {
@@ -529,6 +573,9 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
     // 现在改成独立的界面偏好记下来。
     var advanced by remember { mutableStateOf(cfg.mentorAdvanced) }
     var tweak by remember { mutableStateOf(false) }
+    // skill 那两块默认收起：进来先看到「现在用的是哪个」，想换再点开
+    var skillsOpen by remember { mutableStateOf(false) }
+    var importOpen by remember { mutableStateOf(false) }
     var text by remember { mutableStateOf(cfg.prompt) }
     var url by remember { mutableStateOf("") }
     var importing by remember { mutableStateOf(false) }
@@ -607,8 +654,13 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                 }
             }
         } else {
-            GlassCard(glassAlpha) {
-                Text("内置 skill", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            FoldCard(
+                title = "内置 skill",
+                summary = "当前是「${skillName(cfg.skillId)}」· 点开可换",
+                expanded = skillsOpen,
+                glassAlpha = glassAlpha,
+                onToggle = { skillsOpen = !skillsOpen },
+            ) {
                 Text("点一下直接启用（会替换当前提示词）", fontSize = 12.sp, color = palette.sub)
                 Spacer(Modifier.height(4.dp))
                 BUILT_IN_SKILLS.forEach { skill ->
@@ -642,8 +694,14 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                     }
                 }
             }
-            GlassCard(glassAlpha) {
-                Text("从 GitHub 导入 skill", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+
+            FoldCard(
+                title = "从 GitHub 导入 skill",
+                summary = "粘 SKILL.md 的地址，导入并启用",
+                expanded = importOpen,
+                glassAlpha = glassAlpha,
+                onToggle = { importOpen = !importOpen },
+            ) {
                 Text(
                     "粘 SKILL.md 的地址即可（网页地址也行，会自动换成 raw 直链）。导入时会自动补齐 JSON 输出契约。",
                     fontSize = 12.sp,
@@ -686,6 +744,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                     Text(it, fontSize = 12.sp, color = if (it.startsWith("导入成功")) palette.ok else palette.bad)
                 }
             }
+
             // 这块以前是一整屏的提示词输入框，长得跟上面「新手设置」几乎一模一样 ——
             // 切到进阶后往下滑，会以为新手的内容没关掉。现在默认收起，要看再点开。
             GlassCard(glassAlpha) {
@@ -1217,6 +1276,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                 store.renameRole(current.key, newName)
                 tick++
             },
+            onChanged = { tick++ },
         )
         return
     }
@@ -1232,7 +1292,8 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                 "模块会在你打开某个聊天页时，把读到的消息按联系人归档到这里（1 小时内重复的内容只留一条）。\n" +
                     "点进某个人，写上「TA 是你什么人」和「平时的关系」—— 这些会连同之前攒下的聊天记录一起，\n" +
                     "拼进提示词，直接影响「军师」生成出来的回复。\n" +
-                    "长按某一项可以直接删除它；点进去可以改名字。",
+                    "长按某一项可以直接删除它；点进去可以改名字，\n" +
+                        "也能「把另一个角色合并进来」—— 同一个人被记成两条时用那个。",
                 fontSize = 12.sp,
                 color = palette.sub,
             )
@@ -1343,6 +1404,7 @@ private fun RoleDetail(
     glassAlpha: Float,
     onBack: () -> Unit,
     onRename: (String) -> Unit,
+    onChanged: () -> Unit,
 ) {
     // 「本人」这条没有「TA 是你什么人」，它管的是另一件事（我的说话风格），单独一页
     if (role.key == SELF_ROLE_KEY) {
@@ -1356,6 +1418,16 @@ private fun RoleDetail(
     var confirm by remember { mutableStateOf<String?>(null) }
     var renameOpen by remember { mutableStateOf(false) }
     var draft by remember(role.key) { mutableStateOf(role.name) }
+    // 合并：先选「把谁并进来」，再确认一次（被并掉的那个角色会消失，不可撤销）
+    var mergeOpen by remember { mutableStateOf(false) }
+    var pendingMerge by remember { mutableStateOf<Role?>(null) }
+    var mergedNote by remember(role.key) { mutableStateOf<String?>(null) }
+    var listTick by remember { mutableStateOf(0) }
+    // 候选：除自己以外的普通角色。「本人」不参与合并 —— 它装的是「我自己说过的话」，
+    // 混进别人的话会直接污染说话风格 skill
+    val mergeCandidates = remember(role.key, listTick) {
+        store.roles().filterNot { it.key == role.key || it.key == SELF_ROLE_KEY }
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
         ScreenHeader(role.name, "档案 · ${role.msgs.size} 条记录") {
@@ -1435,6 +1507,27 @@ private fun RoleDetail(
                 }
             }
             Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { mergeOpen = true },
+                enabled = mergeCandidates.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth().height(46.dp),
+                shape = RoundedCornerShape(14.dp),
+            ) { Text("把另一个角色合并进来") }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (mergeCandidates.isEmpty()) {
+                    "还没有别的角色可以合并。"
+                } else {
+                    "同一个人被记成两条时用这个：选一个角色，把它的记录并进这一条（按时间排好）。"
+                },
+                fontSize = 11.sp,
+                color = palette.sub,
+            )
+            mergedNote?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, fontSize = 12.sp, color = palette.ok)
+            }
+            Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
                     onClick = { confirm = "clear" },
@@ -1480,6 +1573,73 @@ private fun RoleDetail(
                 }) { Text("保存") }
             },
             dismissButton = { TextButton(onClick = { renameOpen = false }) { Text("取消") } },
+        )
+    }
+
+    if (mergeOpen) {
+        AlertDialog(
+            onDismissRequest = { mergeOpen = false },
+            title = { Text("把哪个角色合并进来？") },
+            text = {
+                Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                    Text(
+                        "合并后：两边记录按时间排好留在「${role.name}」，被并的那个角色会消失。",
+                        fontSize = 11.sp,
+                        color = palette.sub,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    mergeCandidates.forEach { o ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    mergeOpen = false
+                                    pendingMerge = o
+                                }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                        ) {
+                            Text(o.name, fontSize = 14.sp, color = palette.text)
+                            Text(
+                                "${o.msgs.size} 条记录" +
+                                    if (o.relation.isNotBlank()) " · ${o.relation}" else "",
+                                fontSize = 11.sp,
+                                color = palette.sub,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { mergeOpen = false }) { Text("取消") } },
+        )
+    }
+
+    pendingMerge?.let { src ->
+        AlertDialog(
+            onDismissRequest = { pendingMerge = null },
+            title = { Text("把「${src.name}」合并进来？") },
+            text = {
+                Text(
+                    "「${src.name}」的 ${src.msgs.size} 条记录会并进「${role.name}」，按时间重新排好；" +
+                        "合并完「${src.name}」这个角色就没了，无法撤销。\n\n" +
+                        if (role.relation.isBlank() && (src.relation.isNotBlank() || src.note.isNotBlank())) {
+                            "这边的「TA 是你什么人 / 平时的关系」还空着，会用它的补上。"
+                        } else {
+                            "「TA 是你什么人 / 平时的关系」保留这边的。"
+                        },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    store.mergeRoles(src.key, role.key)
+                    pendingMerge = null
+                    listTick++
+                    mergedNote = "已把「${src.name}」并进来"
+                    onChanged()
+                }) { Text("合并") }
+            },
+            dismissButton = { TextButton(onClick = { pendingMerge = null }) { Text("取消") } },
         )
     }
 

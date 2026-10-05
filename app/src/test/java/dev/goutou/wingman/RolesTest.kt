@@ -2,7 +2,10 @@ package dev.goutou.wingman
 
 import dev.goutou.wingman.config.Role
 import dev.goutou.wingman.config.RoleMsg
+import dev.goutou.wingman.config.ROLE_MAX_MSGS
 import dev.goutou.wingman.config.Roles
+import dev.goutou.wingman.config.SELF_ROLE_KEY
+import dev.goutou.wingman.config.SELF_ROLE_NAME
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -145,6 +148,62 @@ class RolesTest {
         assertEquals("小区物业", roles[0].name)
         assertEquals("服务方", roles[0].relation)
         assertNotEquals(2, roles.size)
+    }
+
+    @Test
+    fun `手动合并：记录按时间升序排到一起，被并的那条消失`() {
+        val zhang = Role(
+            "张三",
+            msgs = listOf(RoleMsg(false, "在吗", t0 + min(5)), RoleMsg(true, "在", t0 + min(6))),
+        )
+        val dup = Role("张三(2)", msgs = listOf(RoleMsg(false, "文件发你了", t0 + min(1))))
+
+        val out = Roles.mergeTwo(listOf(dup, zhang), from = "张三(2)", to = "张三")
+        val merged = out.first { it.key == "张三" }
+        assertEquals(listOf("文件发你了", "在吗", "在"), merged.msgs.map { it.text })
+        assertTrue(out.none { it.key == "张三(2)" })
+    }
+
+    @Test
+    fun `手动合并：名字和档案以保留的那条为准，空着才用对方的补`() {
+        val keep = Role("张三", relation = "同事", note = "写过后端")
+        val gone = Role("老王", relation = "朋友", note = "打球的")
+        val out = Roles.mergeTwo(listOf(keep, gone), from = "老王", to = "张三")
+        val merged = out.first { it.key == "张三" }
+        // 名字永远是保留那条自己的（不会因为对方改过名就被顶掉）
+        assertEquals("张三", merged.name)
+        assertEquals("同事", merged.relation)
+        assertEquals("写过后端", merged.note)
+
+        // 保留那条的档案空着时，用对方的补
+        val empty = Role("小李")
+        val rich = Role("小李(2)", relation = "同学", note = "高中的")
+        val out2 = Roles.mergeTwo(listOf(empty, rich), from = "小李(2)", to = "小李")
+        assertEquals("同学", out2.first { it.key == "小李" }.relation)
+        assertEquals("高中的", out2.first { it.key == "小李" }.note)
+    }
+
+    @Test
+    fun `手动合并：「本人」不参与，合并自己到自己也不动`() {
+        val self = Role(SELF_ROLE_KEY, name = SELF_ROLE_NAME, msgs = listOf(RoleMsg(true, "我发的话", t0)))
+        val other = Role("张三", msgs = listOf(RoleMsg(false, "你好", t0 + min(1))))
+        val input = listOf(self, other)
+
+        assertEquals(input, Roles.mergeTwo(input, from = "张三", to = SELF_ROLE_KEY))
+        assertEquals(input, Roles.mergeTwo(input, from = SELF_ROLE_KEY, to = "张三"))
+        assertEquals(input, Roles.mergeTwo(input, from = "张三", to = "张三"))
+        // 不存在的 key 也不动
+        assertEquals(input, Roles.mergeTwo(input, from = "查无此人", to = "张三"))
+    }
+
+    @Test
+    fun `手动合并：超过上限时留最近的`() {
+        val many = (0 until 200).map { RoleMsg(false, "旧$it", t0 + it * 1000L) }
+        val a = Role("A", msgs = many)
+        val b = Role("B")
+        val merged = Roles.mergeTwo(listOf(a, b), from = "A", to = "B").first { it.key == "B" }
+        assertEquals(ROLE_MAX_MSGS, merged.msgs.size)
+        assertEquals("旧199", merged.msgs.last().text)
     }
 
     @Test

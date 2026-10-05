@@ -203,19 +203,32 @@ object Roles {
         }
     }
 
-    /** 把 [from] 的记录并到 [to] 上（识别成两个名字的同一个人，用这个手动合并）。 */
+    /**
+     * 把 [from] 的记录并到 [to] 上（识别成两个名字的**同一个人**，用户手动合并用）。
+     *
+     * 规则（刻意做得可预测）：
+     * - **记录**：两边合起来**按时间升序**排；超过 [ROLE_MAX_MSGS] 就留最近的。
+     * - **名字**：一律以 `to` 为准 —— 它就是这个角色以后显示的名字（用户是在它的页面上点的合并，
+     *   再悄悄改名会很意外）。
+     * - **档案**：`to` 的「TA 是你什么人 / 平时的关系」空着，才拿 `from` 的补上；
+     *   两边都有就保留 `to` 的（那是用户在这条上写过的）。
+     * - 被并掉的 `from` 整条消失。
+     * - **「本人」不参与**：它装的是「我自己说过的话」，别人的话混进去会直接污染说话风格 skill。
+     */
     fun mergeTwo(roles: List<Role>, from: String, to: String): List<Role> {
-        val a = roles.firstOrNull { it.key == from } ?: return roles
-        val b = roles.firstOrNull { it.key == to } ?: return roles
-        if (a.key == b.key) return roles
+        val fromKey = from.trim()
+        val toKey = to.trim()
+        if (fromKey == toKey || fromKey.isEmpty() || toKey.isEmpty()) return roles
+        if (fromKey == SELF_ROLE_KEY || toKey == SELF_ROLE_KEY) return roles
+        val a = roles.firstOrNull { it.key == fromKey } ?: return roles
+        val b = roles.firstOrNull { it.key == toKey } ?: return roles
         val mergedMsgs = (b.msgs + a.msgs).sortedBy { it.at }
             .let { if (it.size > ROLE_MAX_MSGS) it.takeLast(ROLE_MAX_MSGS) else it }
         val merged = b.copy(
-            name = if (b.renamed) b.name else a.name,
             relation = b.relation.ifBlank { a.relation },
             note = b.note.ifBlank { a.note },
             msgs = mergedMsgs,
         )
-        return roles.filterNot { it.key == from }.map { if (it.key == to) merged else it }
+        return roles.filterNot { it.key == fromKey }.map { if (it.key == toKey) merged else it }
     }
 }
