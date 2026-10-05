@@ -122,6 +122,13 @@ jobs:
           fi
           echo "签名校验通过"
 
+      # 截图回归产出的图（always：单测挂了也把图传上来，方便看是哪一步崩的）
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          path: app/build/screenshots/
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: apk

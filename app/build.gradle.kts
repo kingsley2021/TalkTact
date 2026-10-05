@@ -49,6 +49,12 @@ android {
             stableSigning?.let { signingConfig = it }
         }
     }
+    testOptions {
+        unitTests {
+            // Robolectric 要能读到 res/（字符串、颜色、drawable），否则 Compose 界面渲染不出来
+            isIncludeAndroidResources = true
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -90,4 +96,12 @@ dependencies {
     implementation("io.github.libxposed:service:102.0.0")
 
     testImplementation("junit:junit:4.13.2")
+
+    // 截图回归：在 JVM 上用 Robolectric 把真实界面渲染出来
+    // （跑得比真机快、还能进 CI；渲染结果会作为 artifacts 上传，方便肉眼核对）
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation("androidx.test.ext:junit:1.2.1")
+    testImplementation("androidx.test:core-ktx:1.6.1")
 }
