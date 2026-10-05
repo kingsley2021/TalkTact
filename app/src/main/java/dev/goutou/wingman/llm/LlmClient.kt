@@ -128,37 +128,6 @@ class LlmClient(
         return one to tokens
     }
 
-/**
- * 「单条改写」的三个预设：左边是按钮文字，右边那句原样发给模型。
- * 放这里是为了让微信内的卡片和 App 的「试一试」页共用同一份 —— 改一处两边都变。
- */
-val REWRITE_PRESETS: List<Pair<String, String>> = listOf(
-    "再短点" to "更短：控制在 15 个字以内，意思不变",
-    "更正式" to "语气更正式、礼貌一些，但别变成官腔",
-    "换个说法" to "换一种说法，意思不变",
-)
-
-private const val REWRITE_SYSTEM = """你是微信聊天回复的润色助手：用户给你一条已经写好的回复，你按他的要求改一版。
-
-要求：
-- 只输出改写后的那一句话。不要引号、不要解释、不要 markdown、不要「改写后：」这类前缀。
-- 保持原意和语气，长度不要明显超过原文（要求「再短点」时就该更短）。
-- 像真人发微信：口语、短句；不用客服腔、不用感叹号，不写「收到」「这边」「同步一下」这类话。
-- 涉及钱、承诺、账号、密码、验证码时不要加码，也不要替用户答应任何事。"""
-
-/**
- * 从模型返回里抠出「那一句话」。
- *
- * 即便提示词写得很死，模型还是经常加引号、加「改写后：」前缀、裹一层 markdown 围栏，
- * 或者多解释两行 —— 这里只留第一行干净文本，免得整段塞进输入框。
- */
-internal fun sanitizeOneLine(raw: String): String {
-    var s = raw.trim()
-    Regex("```(?:[a-zA-Z]*)\\s*([\\s\\S]*?)```").find(s)?.let { s = it.groupValues[1].trim() }
-    s = s.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
-    Regex("^(改写后|改写|回复|结果|输出)\\s*[:：]\\s*").find(s)?.let { s = s.removePrefix(it.value) }
-    return s.trim('"', '\'', '“', '”', '‘', '’', '「', '」', '『', '』', '`', '：', ':', ' ').trim()
-}
 
     /** 把这次实际发出去的 system 提示词 / user 消息 / 模型原始返回交给调用方存档。 */
     private fun trace(systemText: String, userText: String, response: String) {
@@ -295,4 +264,36 @@ internal fun sanitizeOneLine(raw: String): String {
             runCatching { conn.disconnect() }
         }
     }
+}
+
+/**
+ * 「单条改写」的三个预设：左边是按钮文字，右边那句原样发给模型。
+ * 放这里是为了让微信内的卡片和 App 的「试一试」页共用同一份 —— 改一处两边都变。
+ */
+val REWRITE_PRESETS: List<Pair<String, String>> = listOf(
+    "再短点" to "更短：控制在 15 个字以内，意思不变",
+    "更正式" to "语气更正式、礼貌一些，但别变成官腔",
+    "换个说法" to "换一种说法，意思不变",
+)
+
+private const val REWRITE_SYSTEM = """你是微信聊天回复的润色助手：用户给你一条已经写好的回复，你按他的要求改一版。
+
+要求：
+- 只输出改写后的那一句话。不要引号、不要解释、不要 markdown、不要「改写后：」这类前缀。
+- 保持原意和语气，长度不要明显超过原文（要求「再短点」时就该更短）。
+- 像真人发微信：口语、短句；不用客服腔、不用感叹号，不写「收到」「这边」「同步一下」这类话。
+- 涉及钱、承诺、账号、密码、验证码时不要加码，也不要替用户答应任何事。"""
+
+/**
+ * 从模型返回里抠出「那一句话」。
+ *
+ * 即便提示词写得很死，模型还是经常加引号、加「改写后：」前缀、裹一层 markdown 围栏，
+ * 或者多解释两行 —— 这里只留第一行干净文本，免得整段塞进输入框。
+ */
+internal fun sanitizeOneLine(raw: String): String {
+    var s = raw.trim()
+    Regex("```(?:[a-zA-Z]*)\\s*([\\s\\S]*?)```").find(s)?.let { s = it.groupValues[1].trim() }
+    s = s.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+    Regex("^(改写后|改写|回复|结果|输出)\\s*[:：]\\s*").find(s)?.let { s = s.removePrefix(it.value) }
+    return s.trim('"', '\'', '“', '”', '‘', '’', '「', '」', '『', '』', '`', '：', ':', ' ').trim()
 }
