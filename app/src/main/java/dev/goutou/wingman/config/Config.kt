@@ -475,3 +475,20 @@ fun chatAllowed(whitelistEnabled: Boolean, whitelist: Set<String>, name: String)
     val key = Roles.normalizeKey(name)
     return key.isNotBlank() && whitelist.contains(key)
 }
+
+/**
+ * 「这一屏要不要拦下来」—— 注入侧用的判定，单测直接钉这个。
+ *
+ * 和 [chatAllowed] 只差一处：**认不出会话名时按拦下处理**（fail-closed）。
+ *
+ * 这里以前是放行的，理由是「用户看到完全没反应不好查」。但白名单是个**隐私开关** ——
+ * 开着它却因为「这屏标题没认出来」把聊天内容读出来、发到接口，比没反应严重得多
+ * （`publish/PRIVACY.md` 里写的是「没勾的会话彻底不处理」）。
+ * 所以改成拦下，同时把原因写到界面上：按钮上「白名单 · 认不出会话名」，
+ * 第一次再给一句提示 —— 既不误发，也不让人猜。
+ */
+fun chatBlocked(whitelistEnabled: Boolean, whitelist: Set<String>, name: String): Boolean {
+    if (!whitelistEnabled) return false
+    val key = Roles.normalizeKey(name)
+    return key.isBlank() || !whitelist.contains(key)
+}

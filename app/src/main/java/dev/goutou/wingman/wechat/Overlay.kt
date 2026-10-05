@@ -20,6 +20,7 @@ import android.content.SharedPreferences
 import dev.goutou.wingman.XposedApi
 import dev.goutou.wingman.Heartbeat
 import dev.goutou.wingman.config.ConfigData
+import dev.goutou.wingman.config.chatBlocked
 import dev.goutou.wingman.config.Keys
 import dev.goutou.wingman.config.Roles
 import dev.goutou.wingman.config.RoleMsg
@@ -117,6 +118,8 @@ internal class Panel(private val a: Activity) {
     private var lastDiagAt = 0L
     private var lastDiagReq = 0L
     private var emptyNotified = false
+    /** 「白名单开着但认不出这个会话的名字」只提示一次，免得每屏都弹。 */
+    private var whitelistNameNotified = false
     private var chatName = ""
     private var chatNameFor = ""
     private val sentMsgs = HashSet<String>()
@@ -396,8 +399,20 @@ internal class Panel(private val a: Activity) {
         // 只有跑完它，这一屏的 chatName 才是刚认出来的（不然第一帧用的还是上一个聊天的名字）。
         // recordToRoles 里面也有一道同样的闸，那道负责「连记录都不做」。
         if (blockedByWhitelist(cfg)) {
-            showIdle()
-            setChip("白名单外 · 未启用")
+            setChip(if (chatName.isBlank()) "白名单 · 认不出会话名" else "白名单外 · 未启用")
+            // 认不出名字这种情况最容易让人以为「白名单坏了」—— 第一次把话说清楚，
+            // 之后只留按钮上的字（诊断在 recordToRoles 里已经写过，含标题候选）。
+            if (chatName.isBlank() && !whitelistNameNotified) {
+                whitelistNameNotified = true
+                showMessage(
+                    "白名单开着，但这个会话的名字没认出来（微信可能改了标题控件），所以先不分析。\n" +
+                        "要在这里用：到「设置 → 高级设置 → 会话白名单」里按名字手动加一个。\n" +
+                        "诊断已写入 App 首页「诊断」卡片。",
+                    isError = true,
+                )
+            } else {
+                showIdle()
+            }
             return
         }
 
@@ -448,17 +463,14 @@ internal class Panel(private val a: Activity) {
      * 「1 小时内重复只留一条」的兜底。
      */
     /**
-     * 白名单判定。
+     * 白名单判定（判定本体在 [chatBlocked]，注入侧与单测共用同一份）。
      *
-     * 会话名认不出来（chatName 为空）时**放行**：读不到标题本来就说明这一屏没认出来，
-     * 再按「不在白名单」拦一刀的话，用户看到的是「完全没反应」—— 比分析一次难查得多。
-     * 那种情况按老规矩走（照常分析 + 留诊断）。
+     * 会话名认不出来时是**拦下**而不是放行 —— 白名单是隐私开关，宁可这一屏什么都不做，
+     * 也不能因为「标题没认出来」就把内容读出来发出去。为了不变成「完全没反应」，
+     * 上面那道闸会把原因写在按钮和提示里。
      */
-    private fun blockedByWhitelist(c: ConfigData): Boolean {
-        if (!c.whitelistEnabled) return false
-        if (chatName.isBlank()) return false
-        return !c.allowsChat(chatName)
-    }
+    private fun blockedByWhitelist(c: ConfigData): Boolean =
+        chatBlocked(c.whitelistEnabled, c.whitelist, chatName)
 
     private fun recordToRoles(decor: View, list: ViewGroup, msgs: List<ChatMsg>, fingerprint: String) {
         try {

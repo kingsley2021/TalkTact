@@ -1110,6 +1110,20 @@ fun AdvancedScreen(
         saved = false
     }
 
+    /**
+     * 白名单的开关 / 添加 / 移除都**立刻落盘**（跟「本地代理」那个开关同一个道理）。
+     *
+     * 这张卡是全页唯一没有自己「保存」按钮的卡 —— 只改草稿 d 的话，注入侧读到的还是旧值，
+     * 表现出来就是「白名单明明开了，没加的聊天照样被分析」（用户实测踩到，还以为是缓存）。
+     * 只落盘这两项：d 里可能还有别的卡片正在编辑、还没点保存的内容（比如接口地址），
+     * 不能顺手一起写进去，所以基准取 store.load() 而不是 d。
+     */
+    fun saveWhitelist(enabled: Boolean, chats: Set<String>) {
+        d = d.copy(whitelistEnabled = enabled, whitelist = chats)
+        store.save(store.load().copy(whitelistEnabled = enabled, whitelist = chats))
+        onSaved()
+    }
+
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
             backupNote = try {
@@ -1145,6 +1159,7 @@ fun AdvancedScreen(
 
     var diagNote by remember { mutableStateOf<String?>(null) }
     var proxyNote by remember { mutableStateOf<String?>(null) }
+    var whitelistNote by remember { mutableStateOf<String?>(null) }
     var newChat by remember { mutableStateOf("") }
     val proxyScope = rememberCoroutineScope()
     // 13+ 才有的通知权限。注意：前台服务**没有**它也照样能跑（系统仍会显示这条常驻通知），
@@ -1524,7 +1539,8 @@ fun AdvancedScreen(
             Text("会话白名单", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
             Text(
                 "只让勾过的聊天（私聊 / 群聊）触发小助手。开着白名单时，没勾的会话**彻底不处理**：\n" +
-                    "不读内容、不记角色、也不调接口 —— 适合「只想在几个人身上用」。",
+                    "不读内容、不记角色、也不调接口 —— 适合「只想在几个人身上用」。\n" +
+                    "认不出会话名的聊天也按「没勾」处理（宁可不动，也不误发）。开关和增删**改完立刻生效**。",
                 fontSize = 11.sp,
                 color = palette.sub,
             )
@@ -1542,7 +1558,18 @@ fun AdvancedScreen(
                         color = palette.sub,
                     )
                 }
-                Switch(checked = d.whitelistEnabled, onCheckedChange = { update(d.copy(whitelistEnabled = it)) })
+                Switch(
+                    checked = d.whitelistEnabled,
+                    onCheckedChange = { on ->
+                        saveWhitelist(on, d.whitelist)
+                        whitelistNote = if (on) {
+                            if (d.whitelist.isEmpty()) "已开，但名单还是空的 —— 等于所有聊天都不工作"
+                            else "已开 · 只对下面这几个会话生效"
+                        } else {
+                            "已关 · 所有聊天都会分析"
+                        }
+                    },
+                )
             }
             if (d.whitelistEnabled) {
                 Spacer(Modifier.height(8.dp))
@@ -1558,7 +1585,8 @@ fun AdvancedScreen(
                         onClick = {
                             val k = Roles.normalizeKey(newChat)
                             if (k.isNotBlank()) {
-                                update(d.copy(whitelist = d.whitelist + k))
+                                saveWhitelist(d.whitelistEnabled, d.whitelist + k)
+                                whitelistNote = "已加入「$k」"
                                 newChat = ""
                             }
                         },
@@ -1584,7 +1612,10 @@ fun AdvancedScreen(
                                 color = palette.bad,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(10.dp))
-                                    .clickable { update(d.copy(whitelist = d.whitelist - name)) }
+                                    .clickable {
+                                        saveWhitelist(d.whitelistEnabled, d.whitelist - name)
+                                        whitelistNote = "已移除「$name」"
+                                    }
                                     .padding(horizontal = 8.dp, vertical = 4.dp),
                             )
                         }
@@ -1597,6 +1628,10 @@ fun AdvancedScreen(
                     fontSize = 11.sp,
                     color = palette.sub,
                 )
+            }
+            whitelistNote?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, fontSize = 11.sp, color = palette.ok)
             }
         }
 
