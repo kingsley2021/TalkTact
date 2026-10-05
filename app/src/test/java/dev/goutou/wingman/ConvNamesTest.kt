@@ -1,9 +1,12 @@
 package dev.goutou.wingman
 
+import dev.goutou.wingman.wechat.MIN_CHAT_ROWS
 import dev.goutou.wingman.wechat.NameCandidate
+import dev.goutou.wingman.wechat.RowShape
 import dev.goutou.wingman.wechat.isRowNoise
 import dev.goutou.wingman.wechat.pickRowName
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -82,5 +85,47 @@ class ConvNamesTest {
         assertEquals("家人群(5)", pickRowName(listOf(NameCandidate("家人群(5)", 40f, 100, 200))))
         assertEquals("妈", pickRowName(listOf(NameCandidate("妈", 40f, 100, 200))))
         assertEquals("阿明 A", pickRowName(listOf(NameCandidate("阿明 A", 40f, 100, 200))))
+    }
+    // ---------------- 形状闸：个人资料页不是会话列表 ----------------
+
+    @Test
+    fun `有左侧头像或时间角标的才像会话行`() {
+        assertTrue(RowShape(avatarSize = 120, hasTimeMark = true, textCount = 3).looksLikeChat)
+        // 头像没被认出来（自绘头像）时，有右上角时间也认
+        assertTrue(RowShape(avatarSize = 0, hasTimeMark = true, textCount = 2).looksLikeChat)
+        assertTrue(RowShape(avatarSize = 120, hasTimeMark = false, textCount = 3).looksLikeChat)
+    }
+
+    @Test
+    fun `个人资料页的字段行不算会话行`() {
+        // 微信号 / 地区 / 个性签名那种行：只有文字，没头像、没时间角标
+        assertFalse(RowShape(avatarSize = 0, hasTimeMark = false, textCount = 1).looksLikeChat)
+        assertFalse(RowShape(avatarSize = 0, hasTimeMark = false, textCount = 2).looksLikeChat)
+        // 一个字都没有的行（纯图片）
+        assertFalse(RowShape(avatarSize = 120, hasTimeMark = false, textCount = 0).looksLikeChat)
+    }
+
+    @Test
+    fun `一个容器至少要两条会话行才算会话列表`() {
+        assertEquals(2, MIN_CHAT_ROWS)
+    }
+
+    @Test
+    fun `资料页的字段文字不是会话名`() {
+        assertTrue(isRowNoise("微信号：wxid_abc123"))
+        assertTrue(isRowNoise("微信号:abc"))
+        assertTrue(isRowNoise("WeChat ID：abc"))
+        assertTrue(isRowNoise("地区：广东 深圳"))
+        assertTrue(isRowNoise("个性签名：随便写写"))
+        assertTrue(isRowNoise("来源：通过手机号添加"))
+        assertTrue(isRowNoise("朋友权限：聊天、朋友圈"))
+        assertNull(pickRowName(listOf(NameCandidate("微信号：wxid_abc", 42f, 100, 200))))
+    }
+
+    @Test
+    fun `只是名字里带资料词的不误伤`() {
+        // 必须「标签 + 冒号」才是字段行；单独出现的人名/群名照旧算名字
+        assertEquals("备注", pickRowName(listOf(NameCandidate("备注", 42f, 100, 200))))
+        assertEquals("来源不明的群", pickRowName(listOf(NameCandidate("来源不明的群", 42f, 100, 200))))
     }
 }

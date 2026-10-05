@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -1216,6 +1217,13 @@ fun AdvancedScreen(
         }
     }
     var newChat by remember { mutableStateOf("") }
+    // 白名单 / 候选的「长按多选」状态 —— 两处各一份，互不干扰
+    var whitePicking by remember { mutableStateOf(false) }
+    var whitePicked by remember { mutableStateOf(emptySet<String>()) }
+    var candPicking by remember { mutableStateOf(false) }
+    var candPicked by remember { mutableStateOf(emptySet<String>()) }
+    // 被「删掉」的候选个数（记在「已忽略」里）—— 界面靠它显示「恢复」
+    var ignoredCount by remember { mutableStateOf(store.chatIgnored().size) }
     val proxyScope = rememberCoroutineScope()
     // 13+ 才有的通知权限。注意：前台服务**没有**它也照样能跑（系统仍会显示这条常驻通知），
     // 但既然要弹，就在用户打开开关时顺手要一下 —— 不然以后那条通知可能被折叠/静音。
@@ -1674,27 +1682,65 @@ fun AdvancedScreen(
                     )
                 } else {
                     Spacer(Modifier.height(6.dp))
-                    d.whitelist.sorted().forEach { name ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(name, fontSize = 13.sp, color = palette.text, modifier = Modifier.weight(1f))
-                            Text(
-                                "移除",
-                                fontSize = 12.sp,
-                                color = palette.bad,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable {
-                                        saveWhitelist(d.whitelistEnabled, d.whitelist - name)
-                                        whitelistNote = "已移除「$name」"
-                                    }
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                            )
-                        }
-                    }
+                    val whiteList = d.whitelist.sorted()
+                if (whitePicking) {
+                    PickBar(
+                        count = whitePicked.size,
+                        total = whiteList.size,
+                        palette = palette,
+                        primaryLabel = "移出白名单",
+                        onPrimary = {
+                            val gone = whitePicked
+                            saveWhitelist(d.whitelistEnabled, d.whitelist - gone)
+                            whitelistNote = "已移出 ${gone.size} 个"
+                            whitePicked = emptySet()
+                            whitePicking = false
+                        },
+                        dangerLabel = "删除（不再出现）",
+                        onDanger = {
+                            val gone = whitePicked
+                            saveWhitelist(d.whitelistEnabled, d.whitelist - gone)
+                            store.ignoreChats(gone)
+                            ignoredCount = store.chatIgnored().size
+                            whitelistNote = "已删除 ${gone.size} 个，以后拉取不再出现"
+                            whitePicked = emptySet()
+                            whitePicking = false
+                        },
+                        onSelectAll = {
+                            whitePicked = if (whitePicked.size == whiteList.size) emptySet() else whiteList.toSet()
+                        },
+                        onCancel = {
+                            whitePicked = emptySet()
+                            whitePicking = false
+                        },
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
+                whiteList.forEach { name ->
+                    PickRow(
+                        label = name,
+                        picking = whitePicking,
+                        selected = name in whitePicked,
+                        palette = palette,
+                        actionLabel = "移除",
+                        actionColor = palette.bad,
+                        onToggle = {
+                            whitePicked = if (name in whitePicked) whitePicked - name else whitePicked + name
+                        },
+                        onLongPress = {
+                            whitePicking = true
+                            whitePicked = whitePicked + name
+                        },
+                        onAction = {
+                            saveWhitelist(d.whitelistEnabled, d.whitelist - name)
+                            whitelistNote = "已移除「$name」"
+                        },
+                    )
+                }
+                Text("长按任意一项可多选，然后一次移出 / 删除。", fontSize = 11.sp, color = palette.sub)
                 }
                 Spacer(Modifier.height(6.dp))
-                Text(
-                    "⚠ 名字要和微信里显示的一致（群聊就填群名；改过备注/昵称的用改过之后的名字）。\n" +
+                Text("⚠ 名字要和微信里显示的一致（群聊就填群名；改过备注/昵称的用改过之后的名字）。\n" +
                         "懒得敲字就用下面的「拉取会话列表」。",
                     fontSize = 11.sp,
                     color = palette.sub,
@@ -1705,7 +1751,8 @@ fun AdvancedScreen(
             Text("从微信里列出来", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = palette.text)
             Text(
                 "点一下，然后回微信的**首页**或**通讯录**停两秒（滚一下能多收几个），再回来这里勾。\n" +
-                    "白名单开着的时候，你打开过的会话也会自己进来。",
+                    "白名单开着的时候，你**打开过的那个聊天**也会自己进来（认的是聊天页顶上那个名字，也就是备注）。\n" +
+                    "⚠ 个人资料页不是来源 —— 那一页只有「微信号 / 地区」这种字段，读出来全是杂项，别在那里等。",
                 fontSize = 11.sp,
                 color = palette.sub,
             )
@@ -1723,6 +1770,7 @@ fun AdvancedScreen(
                 Text(pullInfo, fontSize = 11.sp, color = palette.sub, modifier = Modifier.weight(1f))
             }
             val todo = cands.filter { it !in d.whitelist }.sorted()
+            val shown = todo.take(24)
             if (todo.isEmpty()) {
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -1738,28 +1786,98 @@ fun AdvancedScreen(
             } else {
                 Spacer(Modifier.height(6.dp))
                 Text("还没加进去的（${todo.size}）：", fontSize = 11.sp, color = palette.sub)
-                todo.take(24).forEach { name ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(name, fontSize = 13.sp, color = palette.text, modifier = Modifier.weight(1f))
-                        Text(
-                            "加入",
-                            fontSize = 12.sp,
-                            color = palette.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable {
-                                    saveWhitelist(d.whitelistEnabled, d.whitelist + name)
-                                    whitelistNote = "已加入「$name」"
-                                }
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                        )
-                    }
+                if (candPicking) {
+                    PickBar(
+                        count = candPicked.size,
+                        total = shown.size,
+                        palette = palette,
+                        primaryLabel = "加入白名单",
+                        onPrimary = {
+                            val add = candPicked
+                            saveWhitelist(d.whitelistEnabled, d.whitelist + add)
+                            store.unignoreChats(add)
+                            ignoredCount = store.chatIgnored().size
+                            whitelistNote = "已加入 ${add.size} 个"
+                            candPicked = emptySet()
+                            candPicking = false
+                        },
+                        dangerLabel = "删除（不再出现）",
+                        onDanger = {
+                            val gone = candPicked
+                            store.ignoreChats(gone)
+                            ignoredCount = store.chatIgnored().size
+                            whitelistNote = "已删除 ${gone.size} 个杂项 —— 以后拉取不会再冒出来"
+                            candPicked = emptySet()
+                            candPicking = false
+                        },
+                        onSelectAll = {
+                            candPicked = if (candPicked.size == shown.size) emptySet() else shown.toSet()
+                        },
+                        onCancel = {
+                            candPicked = emptySet()
+                            candPicking = false
+                        },
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
+                shown.forEach { name ->
+                    PickRow(
+                        label = name,
+                        picking = candPicking,
+                        selected = name in candPicked,
+                        palette = palette,
+                        actionLabel = "加入",
+                        actionColor = palette.primary,
+                        onToggle = {
+                            candPicked = if (name in candPicked) candPicked - name else candPicked + name
+                        },
+                        onLongPress = {
+                            candPicking = true
+                            candPicked = candPicked + name
+                        },
+                        onAction = {
+                            saveWhitelist(d.whitelistEnabled, d.whitelist + name)
+                            store.unignoreChats(setOf(name))
+                            ignoredCount = store.chatIgnored().size
+                            whitelistNote = "已加入「$name」"
+                        },
+                    )
                 }
                 if (todo.size > 24) {
                     Text(
                         "还有 ${todo.size - 24} 个没列出来 —— 把上面这些加完再回来。",
                         fontSize = 11.sp,
                         color = palette.sub,
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "长按任意一项可多选，然后一次加入或删除。删除的杂项会被记下来，下次拉取不再出现。",
+                    fontSize = 11.sp,
+                    color = palette.sub,
+                )
+            }
+            if (ignoredCount > 0) {
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "已忽略 $ignoredCount 个（删掉的杂项）",
+                        fontSize = 11.sp,
+                        color = palette.sub,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "恢复",
+                        fontSize = 12.sp,
+                        color = palette.primary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                store.clearIgnored()
+                                ignoredCount = 0
+                                whitelistNote = "已恢复：删掉的候选下次拉取会重新出现"
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
                     )
                 }
             }
@@ -2606,5 +2724,112 @@ fun NoticeBanner(title: String, lines: List<String>) {
 }
 
 /** 时间戳 -> 本地 HH:mm（只用在「上次拉取于 …」这种一句话里）。 */
+/**
+ * 白名单 / 候选共用的一行：不在多选态时右边是一个文字动作；**长按**任意一项进入多选。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PickRow(
+    label: String,
+    picking: Boolean,
+    selected: Boolean,
+    palette: Palette,
+    actionLabel: String,
+    actionColor: Color,
+    onToggle: () -> Unit,
+    onLongPress: () -> Unit,
+    onAction: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .combinedClickable(
+                onClick = { if (picking) onToggle() },
+                onLongClick = onLongPress,
+            ),
+    ) {
+        if (picking) {
+            Checkbox(
+                checked = selected,
+                onCheckedChange = { onToggle() },
+                modifier = Modifier.size(26.dp),
+            )
+            Spacer(Modifier.width(2.dp))
+        }
+        Text(
+            label,
+            fontSize = 13.sp,
+            color = palette.text,
+            modifier = Modifier.weight(1f),
+        )
+        if (!picking) {
+            Text(
+                actionLabel,
+                fontSize = 12.sp,
+                color = actionColor,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { onAction() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/** 多选态的顶部：已选几个 / 全选 / 退出多选，外加两个批量动作。 */
+@Composable
+private fun PickBar(
+    count: Int,
+    total: Int,
+    palette: Palette,
+    primaryLabel: String,
+    onPrimary: () -> Unit,
+    dangerLabel: String,
+    onDanger: () -> Unit,
+    onSelectAll: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Text("已选 $count / $total（长按进入多选，点一下勾选）", fontSize = 11.sp, color = palette.text)
+    Spacer(Modifier.height(4.dp))
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            if (total > 0 && count >= total) "取消全选" else "全选",
+            fontSize = 12.sp,
+            color = palette.primary,
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { onSelectAll() }
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+        )
+        Text(
+            "退出多选",
+            fontSize = 12.sp,
+            color = palette.sub,
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { onCancel() }
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+        )
+    }
+    Spacer(Modifier.height(4.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        Button(
+            onClick = onPrimary,
+            enabled = count > 0,
+            modifier = Modifier.weight(1f).height(42.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+        ) { Text(primaryLabel, fontSize = 13.sp) }
+        OutlinedButton(
+            onClick = onDanger,
+            enabled = count > 0,
+            modifier = Modifier.weight(1f).height(42.dp),
+            shape = RoundedCornerShape(14.dp),
+        ) { Text(dangerLabel, fontSize = 12.sp, color = palette.bad) }
+    }
+}
+
 private fun clockText(at: Long): String =
     java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(at))

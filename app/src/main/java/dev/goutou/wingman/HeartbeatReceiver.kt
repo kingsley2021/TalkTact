@@ -85,9 +85,11 @@ class HeartbeatReceiver : BroadcastReceiver() {
         val chatsInfo = intent.getStringExtra("chatsInfo")
         if (chats != null || chatsInfo != null) {
             if (!chats.isNullOrBlank()) {
+                // 已经被「删掉」的候选不再收回来 —— 否则删完下一次拉取又原样长回来
+                val ignored = sp.getStringSet(Keys.CHAT_IGNORED, emptySet()).orEmpty()
                 val incoming = chats.split('\n')
                     .map { dev.goutou.wingman.config.Roles.normalizeKey(it) }
-                    .filter { it.isNotBlank() && it.length <= 32 }
+                    .filter { it.isNotBlank() && it.length <= 32 && it !in ignored }
                 if (incoming.isNotEmpty()) {
                     val merged = LinkedHashSet(sp.getStringSet(Keys.CHAT_CANDIDATES, emptySet()).orEmpty())
                     merged.addAll(incoming)

@@ -272,9 +272,13 @@ internal class ViewReader(private val a: Activity) {
     /**
      * 当前这一屏（微信首页 / 通讯录）里看得见的会话名 —— 「白名单」页的候选靠它。
      *
-     * 判据只有一条：**最大的那个像列表的容器**。不认类名、也不判断「这是不是首页」——
-     * 靠类名猜页面（LauncherUI…）正是这个模块一直在避免的事（微信一改版本就失效）；
-     * 而在朋友圈 / 设置页上跑，读出来自然就是空的，无害。
+     * 判据两条，缺一不可：
+     * 1. **容器像列表**：有滚动能力、够高、子视图够多。不认类名、也不判断「这是不是首页」——
+     *    靠类名猜页面（LauncherUI…）正是这个模块一直在避免的事（微信一改版本就失效）。
+     * 2. **行像会话**：左边有方形头像，或者带时间角标（见 [RowShape.looksLikeChat]）。
+     *    这条是后补的，也是真机反馈的根因：**个人资料页**（点开头像进去那一页）也是一行行的列表，
+     *    只按第 1 条判断的话它整页都会被当成「会话列表」，候选里全是「微信号：xxx」这种杂项，
+     *    真正的名字（备注）反而读不到。
      *
      * 返回 (名字们, 现场说明)：拉不到东西时，说明里那一句就是排查的全部线索。
      */
@@ -296,20 +300,66 @@ internal class ViewReader(private val a: Activity) {
         if (lists.isEmpty()) return emptyList<String>() to "没找到像「会话列表」的容器"
 
         val names = LinkedHashSet<String>()
-        var rows = 0
+        var rows = 0       // 扫过的行
+        var chatRows = 0   // 通过「像会话」形状闸的行
+        var accepted = 0   // 真正被采纳的容器
         // 取**并集**而不是「面积最大的那个」：微信经常是外层 RecyclerView 套内层，
         // 只挑最大的会挑到外层，那一屏就只剩一行（里面还套着列表），读出 0 个名字。
         for (list in lists) {
+            var localChatRows = 0
+            val localNames = ArrayList<String>()
             for (i in 0 until list.childCount) {
                 val row = list.getChildAt(i) ?: continue
                 if (!row.isShown) continue
                 // 这一格里还套着一个列表 → 它是容器、不是一行，跳过（外层包内层就是这个形状）
                 if (holdsList(row)) continue
                 rows++
-                pickRowName(rowCandidates(row))?.let { names.add(it) }
+                // 形状闸：不像会话行的一律不参与挑名字（资料页 / 设置页那些行全卡在这里）
+                if (!rowShape(row).looksLikeChat) continue
+                localChatRows++
+                pickRowName(rowCandidates(row))?.let { localNames.add(it) }
+            }
+            // 整页至少两条会话行才采纳：资料页顶部有一个大头像（也算一行），
+            // 门槛放到 1 会被它骗过去 —— 两条一起出现才基本只可能是会话列表。
+            if (localChatRows >= MIN_CHAT_ROWS) {
+                accepted++
+                chatRows += localChatRows
+                names.addAll(localNames)
             }
         }
-        return names.toList() to "容器=${lists.size}｜行=$rows｜认出名字=${names.size}"
+        if (accepted == 0) {
+            return emptyList<String>() to
+                "容器=${lists.size}｜行=$rows｜会话行=0 —— 这一屏不像会话列表"
+        }
+        return names.toList() to
+            "容器=$accepted（扫过 ${lists.size}）｜行=$rows｜会话行=$chatRows｜认出名字=${names.size}"
+    }
+
+    /** 量一行的形状：最左边有没有方形头像、有没有时间角标、有几个带文字的控件。 */
+    private fun rowShape(row: View): RowShape {
+        var avatarSize = 0
+        var timeMark = false
+        var textCount = 0
+        val leftLimit = width * 0.30f
+        walk(row) { v ->
+            if (!v.isShown) return@walk
+            if (v is ImageView) {
+                val w = if (v.width > 0) v.width else v.measuredWidth
+                val h = if (v.height > 0) v.height else v.measuredHeight
+                // 方形 + 正常头像尺寸 + 贴左边 —— 会话行就是这么摆的
+                if (w in dp(24)..dp(84) && h > 0 && abs(w - h) <= dp(4) && leftOf(v) < leftLimit) {
+                    if (w > avatarSize) avatarSize = w
+                }
+                return@walk
+            }
+            val t = (if (v is TextView) v.text?.toString() else TextCapture.textOf(v)?.toString())
+                ?.trim().orEmpty()
+            if (t.isNotEmpty()) {
+                textCount++
+                if (Chrome.isChrome(t)) timeMark = true
+            }
+        }
+        return RowShape(avatarSize, timeMark, textCount)
     }
 
     /** row 里面还套着另一个「像列表」的容器吗（外层 RecyclerView 包内层的典型形状）。 */

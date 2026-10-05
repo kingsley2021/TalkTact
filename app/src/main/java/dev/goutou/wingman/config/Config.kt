@@ -89,6 +89,8 @@ object Keys {
     /** 上次拉取时的现场说明（扫到几个列表 / 几行 / 认出几个名字），拉不到东西时靠它排查 */
     const val CHAT_INFO = "chat_info"
     const val CHAT_AT = "chat_at"
+    /** 白名单页里「删掉」的候选（归一化过）：记下来，下次拉取不再冒出来 */
+    const val CHAT_IGNORED = "chat_ignored"
 }
 
 /** 默认几点跑。 */
@@ -334,8 +336,45 @@ class ConfigStore(context: Context) {
      *  就能分清「请求还没送到微信侧」和「送到了但没读出名字」——这两件事的排查方向是相反的。 */
     fun chatRequestAt(): Long = sp.getLong(Keys.CHAT_REQ, 0L)
 
-    /** 注入侧回传的会话名候选（归一化过、已去重；上限 300）。 */
-    fun chatCandidates(): Set<String> = sp.getStringSet(Keys.CHAT_CANDIDATES, emptySet()).orEmpty()
+    /** 注入侧回传的会话名候选（归一化过、已去重；上限 300）。被「删掉」过的不再列出。 */
+    fun chatCandidates(): Set<String> {
+        val all = sp.getStringSet(Keys.CHAT_CANDIDATES, emptySet()).orEmpty().toSet()
+        return all - chatIgnored()
+    }
+
+    /** 被「长按多选 → 删除」掉的候选名（归一化过）。拉取回来的候选会先过一遍这里。 */
+    fun chatIgnored(): Set<String> =
+        sp.getStringSet(Keys.CHAT_IGNORED, emptySet()).orEmpty().toSet()
+
+    /**
+     * 把这些候选名拉黑，并从已收候选里删掉 —— 白名单页「长按多选 → 删除」用。
+     *
+     * 为什么除了删还要单独记一份「已忽略」：候选是注入侧每次回传时**并**进来的，
+     * 只从候选里删掉的话，下一次拉取它们会原样长回来（用户实测「杂项删不掉」就是这个）。
+     */
+    fun ignoreChats(names: Set<String>): Set<String> {
+        val norm = names.map { Roles.normalizeKey(it) }.filter { it.isNotBlank() }.toSet()
+        if (norm.isEmpty()) return chatIgnored()
+        val ignored = LinkedHashSet(chatIgnored()).apply { addAll(norm) }
+        val left = sp.getStringSet(Keys.CHAT_CANDIDATES, emptySet()).orEmpty().toSet() - norm
+        sp.edit()
+            .putStringSet(Keys.CHAT_IGNORED, ignored.toHashSet())
+            .putStringSet(Keys.CHAT_CANDIDATES, left.toHashSet())
+            .apply()
+        return ignored
+    }
+
+    /** 把名字从「已忽略」里放出来（手动又把它加回白名单 / 点「恢复」时用）。 */
+    fun unignoreChats(names: Set<String>) {
+        val norm = names.map { Roles.normalizeKey(it) }.filter { it.isNotBlank() }.toSet()
+        if (norm.isEmpty()) return
+        sp.edit().putStringSet(Keys.CHAT_IGNORED, (chatIgnored() - norm).toHashSet()).apply()
+    }
+
+    /** 清空「已忽略」—— 恢复整份候选。 */
+    fun clearIgnored() {
+        sp.edit().remove(Keys.CHAT_IGNORED).apply()
+    }
 
     /** 上次拉取的现场说明 + 时间戳（空串 / 0 = 还没拉过）。 */
     fun chatPullInfo(): Pair<String, Long> =
