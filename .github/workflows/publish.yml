@@ -54,6 +54,38 @@ jobs:
       - name: build apk
         run: gradle :app:assembleDebug --no-daemon
 
+      # 签名必须是真的：签不上、或悄悄退回默认 debug key，用户升级就会 INSTALL_FAILED_UPDATE_INCOMPATIBLE。
+      # 注意 minSdk 31 时 AGP 只做 v2/v3 签名，APK 里没有 v1 的 META-INF/*.RSA —— 必须用 apksigner 验。
+      - name: verify apk signature
+        run: |
+          set -e
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          echo "apk：$APK"
+          echo "sha256：$(sha256sum "$APK" | cut -d' ' -f1)"
+
+          ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$APKSIGNER" ]; then
+            SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+            "$SDKMANAGER" --install "build-tools;35.0.0" >/dev/null
+            APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          fi
+          echo "apksigner：$APKSIGNER"
+
+          "$APKSIGNER" verify --print-certs "$APK" | grep -E '^Signer #1 certificate (DN|SHA-256)' || true
+          GOT=$("$APKSIGNER" verify --print-certs "$APK" \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 \
+            | tr -d ':' | tr 'a-z' 'A-Z')
+          echo "证书 SHA-256（无分隔）：$GOT"
+
+          # 发布证书的指纹（公开信息，硬编码在这里当断言用）
+          EXPECTED=F8D1C2B43AE5EBD3169493937A7DF7AD2C23C59197E29E999E7FCBA626807AD5
+          if [ -n "$KEYSTORE_BASE64" ] && [ "$GOT" != "$EXPECTED" ]; then
+            echo "::error::签出来的不是发布证书（是不是退回了默认 debug 签名？）"
+            exit 1
+          fi
+          echo "签名校验通过"
+
       - name: read version
         id: v
         run: |
