@@ -128,9 +128,11 @@ internal class ViewReader(private val a: Activity) {
                 val off = abs((loc[0] + v.width / 2f) - screenW / 2f) / screenW.toFloat()
                 if (off > 0.16f) return@walk
                 // 居中是主判据；宽度和字号只用来打平手（标题通常比旁边的东西更大更宽）
+                // 自绘控件的 v 不是 TextView，没有 textSize，取不到就算 0
+                val textPx = (v as? TextView)?.textSize ?: 0f
                 val score = ((1f - off) * 1000).toInt() +
                     v.width.coerceAtMost(screenW) / 20 +
-                    (v.textSize.coerceAtMost(dp(40).toFloat()) / 4f).toInt()
+                    (textPx.coerceAtMost(dp(40).toFloat()) / 4f).toInt()
                 if (score > bestScore) {
                     bestScore = score
                     best = t
