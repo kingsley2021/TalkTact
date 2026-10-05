@@ -73,9 +73,10 @@ class GradedTest {
     @Test
     fun `摘掉输出契约时连段落一起摘`() {
         val riskPrompt = gradedRiskPrompt(DEFAULT_PROMPT)
-        // 原来那份契约（带 replies）必须整段消失，不能留下半句「只输出下面这个 JSON」
+        // 旧契约（带 replies / best 的那整段）必须消失 —— 用它的原文来钉，别用「只输出…」这种
+        // 两路契约里都有的措辞（RISK_CONTRACT 自己也写着「只输出下面这个 JSON」）
         assertFalse(riskPrompt.contains("\"replies\""))
-        assertFalse(riskPrompt.contains("只输出下面这个 JSON"))
+        assertFalse(riskPrompt.contains("\"intent\":\"一句话\""))
         assertTrue(riskPrompt.endsWith("\"note\":\"一句话提醒\"}"))
     }
 
