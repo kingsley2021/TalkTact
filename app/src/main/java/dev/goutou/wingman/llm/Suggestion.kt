@@ -82,11 +82,28 @@ object SuggestionParser {
             )
         }
 
+        val rawIntent = root["intent"].asStr()?.trim().orEmpty()
+        val rawRisk = root["risk"].asStr()?.trim().orEmpty()
+        val rawNote = root["note"].asStr()?.trim().orEmpty()
+
+        // 另一头也要守住：这一路不要求候选（分级模式的风险那一路），那它至少要带回
+        // 意图 / 风险 / 提醒里的一项。否则等于什么也没说 —— 别让一个空 JSON 混成「成功」，
+        // 界面上显示成一个空的「未知 / 未识别」，比直接报错更难查。
+        if (!requireReplies && replies.isEmpty() &&
+            rawIntent.isEmpty() && rawRisk.isEmpty() && rawNote.isEmpty()
+        ) {
+            throw LlmException(
+                "模型没给出风险评估（返回里没有任何可用内容）",
+                "换个模型，或到「提示词」页确认风险契约还在",
+                retryable = true,
+            )
+        }
+
         val kept = replies.take(4)
         return Suggestion(
-            intent = root["intent"].asStr()?.trim().orEmpty().ifEmpty { "未识别" },
-            risk = normalizeRisk(root["risk"].asStr().orEmpty()),
-            note = root["note"].asStr()?.trim().orEmpty(),
+            intent = rawIntent.ifEmpty { "未识别" },
+            risk = normalizeRisk(rawRisk),
+            note = rawNote,
             replies = kept,
             best = parseBest(root["best"], kept),
             why = root["why"].asStr()?.trim().orEmpty(),

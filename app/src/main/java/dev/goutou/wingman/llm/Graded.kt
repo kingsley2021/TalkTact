@@ -121,10 +121,10 @@ object Graded {
             if (riskSug == null) {
                 try {
                     val r = riskClient.analyzeWith(
-                    gradedRiskPrompt(skillPrompt), msgs, roleContext,
-                    // 风险那一路的契约里没有 replies，不能按「必须有候选」判
-                    requireReplies = false,
-                )
+                        gradedRiskPrompt(skillPrompt), msgs, roleContext,
+                        // 风险那一路的契约里没有 replies，不能按「必须有候选」判
+                        requireReplies = false,
+                    )
                     riskSug = r.suggestion
                     riskTokens += r.totalTokens
                     riskErr = null

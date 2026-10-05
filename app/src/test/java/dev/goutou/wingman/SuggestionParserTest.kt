@@ -152,4 +152,20 @@ class SuggestionParserTest {
         assertEquals("先别答应时间", s.note)
         assertTrue(s.replies.isEmpty())
     }
+
+    @Test
+    fun `风险那一路什么都没带回来时仍算失败`() {
+        // 不要求候选 ≠ 什么都能收：空 JSON 当成成功的话，卡片上只会显示成空的「未知 / 未识别」，
+        // 比直接报错更难查。所以还要带回 intent / risk / note 里至少一项。
+        try {
+            SuggestionParser.parse("""{}""", requireReplies = false)
+            fail("空返回不应被当成成功")
+        } catch (e: LlmException) {
+            assertTrue(e.message!!.contains("风险评估"))
+        }
+        // 只要带回一项就算数
+        val s = SuggestionParser.parse("""{"risk":"低"}""", requireReplies = false)
+        assertEquals("低", s.risk)
+        assertEquals("未识别", s.intent)
+    }
 }
