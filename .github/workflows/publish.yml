@@ -138,7 +138,7 @@ jobs:
           fi
 
           # 同步 SUMMARY / README.md（有就更新，没有就创建）
-          for f in SUMMARY README.md; do
+          for f in SUMMARY README.md FAQ.md PRIVACY.md; do
             SHAF=$(gh api "/repos/$R/contents/$f" --jq '.sha' 2>/dev/null || true)
             if [ -n "$SHAF" ]; then
               gh api -X PUT "/repos/$R/contents/$f" -f message="Sync $f" \
@@ -156,6 +156,9 @@ jobs:
             printf '变更记录：https://github.com/shibry88-netizen/TalkTact/blob/main/CHANGELOG.md\n\n'
             printf '下载：`%s`\n' "$ASSET"
             printf 'sha256：`%s`\n' "$SHA"
+            # 固定的风控提示（每次都带，不做成一次性免责）
+            printf '\n---\n\n⚠️ **风控提醒**：本模块会修改微信客户端行为，存在账号风险，请自行评估（建议先用小号）。\n'
+            printf '它只读聊天页上的消息、只把候选回复填进输入框，**不会自动发送**，也不做任何上报 —— 详见 FAQ 与 PRIVACY。\n'
             if [ "$CODE" -ge 35 ]; then
               printf '\n---\n\n⚠️ **本版换了签名密钥**（旧密钥曾公开，已作废）：\n'
               printf '从 0.8.7 及更早版本升级，**必须先卸载旧版再安装** —— 配置会一起删掉，\n'
