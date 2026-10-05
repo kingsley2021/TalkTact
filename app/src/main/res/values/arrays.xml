@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- 作用域：只勾微信，别多勾 -->
-    <string-array name="xposed_scope">
-        <item>com.tencent.mm</item>
-    </string-array>
-</resources>

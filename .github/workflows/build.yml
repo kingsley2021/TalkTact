@@ -7,13 +7,30 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
+      - uses: android-actions/setup-android@v3
+      # libxposed api/service 102 的 AAR 声明了 minCompileSdk=37，平台得装 37
+      - name: install Android platform 37
+        run: sdkmanager --install "platforms;android-37"
       - uses: gradle/actions/setup-gradle@v4
-        with: { gradle-version: 8.7 }
+        with: { gradle-version: 8.13 }
       # 纯逻辑层的单元测试（不依赖 Android SDK，几秒钟）
       - name: unit test
         run: gradle :app:testDebugUnitTest --no-daemon --stacktrace
       - name: build apk
         run: gradle :app:assembleDebug --no-daemon
+      # 现代 API 的「我是模块」全写在这三个文件上，缺一个框架就不认它（列表里都不出现）。
+      # 反过来，残留 legacy 的 assets/xposed_init 会让框架按老模块处理 —— 那就是白迁了。
+      - name: verify module metadata
+        run: |
+          set -e
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          echo "检查 $APK"
+          unzip -l "$APK" > /tmp/apk-list.txt
+          for f in META-INF/xposed/module.prop META-INF/xposed/java_init.list META-INF/xposed/scope.list; do
+            if ! grep -q "$f" /tmp/apk-list.txt; then echo "缺少 $f"; exit 1; fi
+          done
+          if grep -q "assets/xposed_init" /tmp/apk-list.txt; then echo "仍残留 legacy assets/xposed_init"; exit 1; fi
+          echo "modern 元数据齐全，且无 legacy 残留"
       - uses: actions/upload-artifact@v4
         with:
           name: apk

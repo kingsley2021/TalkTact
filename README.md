@@ -2,7 +2,10 @@
 
 在微信聊天页顶部悬浮一张卡片：读最近几条消息 → 调 LLM → 给 3 条风格不同的候选回复 → **点一下填入输入框**（不会自动发送）。
 
-当前版本 **v0.5.0**。对 v0.1 的重写说明见 [IMPROVEMENTS.md](IMPROVEMENTS.md)，历次改动见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v0.7.0**。对 v0.1 的重写说明见 [IMPROVEMENTS.md](IMPROVEMENTS.md)，历次改动见 [CHANGELOG.md](CHANGELOG.md)。
+
+> **框架要求**：v0.7.0 起模块改用 libxposed Modern API 102（`minApiVersion=102`），
+> 需要框架本身提供 API 102。框架版本低于这个要求时，模块会显示为不兼容、不会加载。
 
 ## 功能
 

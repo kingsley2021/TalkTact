@@ -1,0 +1,15 @@
+# libxposed 模块元数据（Modern API）。
+#
+# 和 legacy 的区别：这些信息以前散在 AndroidManifest 的 meta-data 里 + assets/xposed_init，
+# 现在统一收在这三个文件里，Gradle 会把 src/main/resources 下的内容原样打进 APK。
+#
+# minApiVersion / targetApiVersion：声明本模块按 API 102 编写。
+# 注意 102 的行为变更：targeting 102 的模块**不得**再调用 de.robv.android.xposed 下的任何 API。
+minApiVersion=102
+targetApiVersion=102
+# 作用域固定为 scope.list 里那几个包（本模块只可能对微信有意义）
+staticScope=true
+# hook 抛异常时按「当作没有这个 hook、照常放行」处理，避免把微信搞崩
+exceptionMode=protective
+# 热重载起步阶段先不开：需要配套实现 onHotReloading/onHotReloaded
+autoHotReload=false
