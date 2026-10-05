@@ -376,6 +376,23 @@ class ConfigStore(context: Context) {
         sp.edit().remove(Keys.CHAT_IGNORED).apply()
     }
 
+    /**
+     * 只改「白名单开关 + 名单」这两项，**立刻落盘**（增删和开关都要即时生效 —— 这张卡没有保存按钮）。
+     *
+     * 刻意只写这两项，而不是让调用方 `save(load().copy(...))`：白名单卡所在的那一页还有别的卡片
+     * 正在编辑、还没点保存的内容（接口地址、生成模式…），整体写回会把它们的草稿一起定死。
+     * 名字按 `save()` 同一套规矩归一化、去掉空串 —— 存进去的和注入侧读出来的必须是同一套写法。
+     */
+    fun saveWhitelist(enabled: Boolean, chats: Set<String>) {
+        sp.edit()
+            .putBoolean(Keys.WHITELIST_ON, enabled)
+            .putStringSet(
+                Keys.WHITELIST,
+                chats.map { Roles.normalizeKey(it) }.filter { it.isNotBlank() }.toHashSet(),
+            )
+            .apply()
+    }
+
     /** 上次拉取的现场说明 + 时间戳（空串 / 0 = 还没拉过）。 */
     fun chatPullInfo(): Pair<String, Long> =
         sp.getString(Keys.CHAT_INFO, "").orEmpty() to sp.getLong(Keys.CHAT_AT, 0L)

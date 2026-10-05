@@ -10,7 +10,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.goutou.wingman.config.ConfigStore
+import dev.goutou.wingman.config.Keys
+import dev.goutou.wingman.config.PREF_NAME
 import dev.goutou.wingman.ui.AdvancedScreen
+import dev.goutou.wingman.ui.ChatCandidatesScreen
 import dev.goutou.wingman.ui.SettingsScreen
 import dev.goutou.wingman.ui.TrialScreen
 import org.junit.Assert.assertTrue
@@ -92,11 +95,33 @@ class ScreenRenderTest {
 
     @Test
     fun `高级设置能渲染 且含生成模式开关`() {
-        rule.setContent { AdvancedScreen(store, store.load(), {}, {}, {}) }
+        rule.setContent { AdvancedScreen(store, store.load(), {}, {}, {}, {}) }
         rule.onNodeWithText("生成模式").assertExists()
         // 两个模式都在（用 pill 的文案断言；输入框的 label 不在语义树的文字里）
         rule.onNodeWithText("直通（一套接口）").assertExists()
         rule.onNodeWithText("模型分级").assertExists()
+        // 白名单卡顶部那张白底说明 / 注意事项卡也在
+        rule.onNodeWithText("怎么用").assertExists()
+        rule.onNodeWithText("会话白名单").assertExists()
         capture("advanced")
+    }
+
+    @Test
+    fun `拉取到的联系人页能渲染 且有搜索框和两段名单`() {
+        // 造一份「拉回来的名单」，其中老张已经在白名单里 —— 两段（还没加进去的 / 已经在白名单里的）都要画出来
+        ApplicationProvider.getApplicationContext<Context>()
+            .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putStringSet(Keys.CHAT_CANDIDATES, linkedSetOf("妈妈", "老张", "项目群"))
+            .putLong(Keys.CHAT_AT, System.currentTimeMillis())
+            .apply()
+        store.save(store.load().copy(whitelistEnabled = true, whitelist = setOf("老张")))
+
+        rule.setContent { ChatCandidatesScreen(store, store.load(), {}, {}) }
+        rule.onNodeWithText("拉取到的联系人").assertExists()
+        rule.onNodeWithText("拉取会话列表").assertExists()
+        rule.onNodeWithText("还没加进去的（2）").assertExists()
+        rule.onNodeWithText("已经在白名单里的（1）").assertExists()
+        capture("chat-candidates")
     }
 }

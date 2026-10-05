@@ -97,3 +97,16 @@ fun isRowNoise(raw: String): Boolean {
     if (t.length == 1 && t[0].code < 128) return true
     return false
 }
+
+/**
+ * 候选名单的搜索过滤（纯函数，单测在 ConvNamesTest）。
+ *
+ * 空查询 = 原样返回；否则按「包含」匹配、忽略大小写，并保持传进来的顺序。
+ * 名字以中文为主，不做拼音 / 分词 —— 这里要的是「输一两个字把几十个名字筛到几个」，
+ * 直接 contains 就够了，行为也更好预测。
+ */
+fun filterNames(names: List<String>, query: String): List<String> {
+    val q = query.trim()
+    if (q.isEmpty()) return names
+    return names.filter { it.contains(q, ignoreCase = true) }
+}

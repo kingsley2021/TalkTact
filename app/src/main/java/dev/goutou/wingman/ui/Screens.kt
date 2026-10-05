@@ -98,6 +98,7 @@ import dev.goutou.wingman.llm.gradedWaitMs
 import dev.goutou.wingman.llm.isReplyTooLong
 import dev.goutou.wingman.wechat.ChatMsg
 import dev.goutou.wingman.wechat.Sensitive
+import dev.goutou.wingman.wechat.filterNames
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -1112,6 +1113,7 @@ fun SettingsScreen(
  *
  * 从设置首页搬过来的四块：接口地址、微信内自动分析（含敏感检查）、备份 / 迁移、诊断入口。
  * 它们的共同点是「配一次就不常动」，所以单独一层；诊断再往里一层（三级）。
+ * 「会话白名单」卡里的候选人名单同理 —— 拉回来的联系人放 [ChatCandidatesScreen]（也是三级）。
  */
 @Composable
 fun AdvancedScreen(
@@ -1119,6 +1121,7 @@ fun AdvancedScreen(
     ui: ConfigData,
     onSaved: () -> Unit,
     onOpenDiag: () -> Unit,
+    onOpenCandidates: () -> Unit,
     onBack: () -> Unit,
 ) {
     val palette = LocalPalette.current
@@ -1148,13 +1151,15 @@ fun AdvancedScreen(
      *
      * 这张卡是全页唯一没有自己「保存」按钮的卡 —— 只改草稿 d 的话，注入侧读到的还是旧值，
      * 表现出来就是「白名单明明开了，没加的聊天照样被分析」（用户实测踩到，还以为是缓存）。
-     * 只落盘这两项：d 里可能还有别的卡片正在编辑、还没点保存的内容（比如接口地址），
-     * 不能顺手一起写进去，所以基准取 store.load() 而不是 d。
+     * 只写这两项（`ConfigStore.saveWhitelist`）：这页还有别的卡在编辑、还没点保存，
+     * 不能顺手把它们一起定死。二级页也要用同一份写法，所以这件事放在 store 上。
      */
     fun saveWhitelist(enabled: Boolean, chats: Set<String>) {
-        d = d.copy(whitelistEnabled = enabled, whitelist = chats)
-        store.save(store.load().copy(whitelistEnabled = enabled, whitelist = chats))
-        persisted = store.load()
+        store.saveWhitelist(enabled, chats)
+        val fresh = store.load()
+        // 只把这两项同步回草稿 —— 别的地方可能还有没保存的编辑，不能整份覆盖
+        d = d.copy(whitelistEnabled = fresh.whitelistEnabled, whitelist = fresh.whitelist)
+        persisted = fresh
         onSaved()
     }
 
@@ -1217,11 +1222,10 @@ fun AdvancedScreen(
         }
     }
     var newChat by remember { mutableStateOf("") }
-    // 白名单 / 候选的「长按多选」状态 —— 两处各一份，互不干扰
+    // 白名单的「长按多选」状态。
+    // （候选名单那一份跟着名单一起搬到二级页了，见 ChatCandidatesScreen —— 那边自己持有一份。）
     var whitePicking by remember { mutableStateOf(false) }
     var whitePicked by remember { mutableStateOf(emptySet<String>()) }
-    var candPicking by remember { mutableStateOf(false) }
-    var candPicked by remember { mutableStateOf(emptySet<String>()) }
     // 被「删掉」的候选个数（记在「已忽略」里）—— 界面靠它显示「恢复」
     var ignoredCount by remember { mutableStateOf(store.chatIgnored().size) }
     val proxyScope = rememberCoroutineScope()
@@ -1616,13 +1620,42 @@ fun AdvancedScreen(
 
         GlassCard(d.glassAlpha) {
             Text("会话白名单", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
-            Text(
-                "只让勾过的聊天（私聊 / 群聊）触发小助手。开着白名单时，没勾的会话**彻底不处理**：\n" +
-                    "不读内容、不记角色、也不调接口 —— 适合「只想在几个人身上用」。\n" +
-                    "认不出会话名的聊天也按「没勾」处理（宁可不动，也不误发）。开关和增删**改完立刻生效**。",
-                fontSize = 11.sp,
-                color = palette.sub,
-            )
+            // 白底说明卡放最上面：这一页最容易踩的坑（名字对不上、开关开着名单空着）先说清楚。
+            // 白卡和玻璃卡刻意不同 —— 玻璃是界面的一部分，白卡是「贴上去的说明书」。
+            WhiteCard {
+                Text("怎么用", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFF1C1B22))
+                listOf(
+                    "打开开关后，只有名单里的聊天会触发小助手；不在名单里的，不读内容、不记角色、也不调接口。",
+                    "加名字三种办法：① 下面的输入框手打；② 点「拉取会话列表」，回微信的首页 / 通讯录停两秒；" +
+                        "③ 白名单开着时，打开某个聊天，它的名字会自己进来。",
+                    "开关和增删都是改完立刻生效 —— 这张卡没有「保存」按钮。",
+                ).forEach { line ->
+                    Text(
+                        "· $line",
+                        fontSize = 11.sp,
+                        color = Color(0xFF55525E),
+                        modifier = Modifier.padding(top = 3.dp),
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text("⚠ 注意事项", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFFB3261E))
+                listOf(
+                    "名字要和微信里显示的一致：群聊填群名；改过备注 / 昵称的，用改过之后的名字。",
+                    "认不出会话名的聊天按「没勾」处理 —— 宁可不动，也不误发。",
+                    "开关开着、名单却是空的 = 所有聊天都不工作。",
+                    "个人资料页不是来源：那一页只有「微信号 / 地区」这类字段，读出来全是杂项。",
+                    "拉取时要停在微信的列表页（首页 / 通讯录）；聊天页里读到的是消息正文，不是名字。",
+                    "白名单关着时，模块不收集任何会话名（不打算用它的人，不会被攒一份联系人名单）。",
+                    "移出白名单只是不再分析它；已经记下的角色和聊天记录不会被删掉。",
+                ).forEach { line ->
+                    Text(
+                        "· $line",
+                        fontSize = 11.sp,
+                        color = Color(0xFF55525E),
+                        modifier = Modifier.padding(top = 3.dp),
+                    )
+                }
+            }
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -1740,8 +1773,8 @@ fun AdvancedScreen(
                 Text("长按任意一项可多选，然后一次移出 / 删除。", fontSize = 11.sp, color = palette.sub)
                 }
                 Spacer(Modifier.height(6.dp))
-                Text("⚠ 名字要和微信里显示的一致（群聊就填群名；改过备注/昵称的用改过之后的名字）。\n" +
-                        "懒得敲字就用下面的「拉取会话列表」。",
+                Text(
+                    "名字要和微信里显示的一致（群聊填群名；改过备注的用改过的名字）；懒得敲字就用下面的「拉取会话列表」。",
                     fontSize = 11.sp,
                     color = palette.sub,
                 )
@@ -1750,8 +1783,8 @@ fun AdvancedScreen(
             Spacer(Modifier.height(12.dp))
             Text("从微信里列出来", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = palette.text)
             Text(
-                "点一下，然后回微信的**首页**或**通讯录**停两秒（滚一下能多收几个），再回来这里勾。\n" +
-                    "白名单开着的时候，你**打开过的那个聊天**也会自己进来（认的是聊天页顶上那个名字，也就是备注）。\n" +
+                "点一下，然后回微信的首页或通讯录停两秒（滚一下能多收几个），再回来打开下面的「拉取到的联系人」去挑。\n" +
+                    "白名单开着的时候，你打开过的那个聊天也会自己进来（认的是聊天页顶上那个名字，也就是备注）。\n" +
                     "⚠ 个人资料页不是来源 —— 那一页只有「微信号 / 地区」这种字段，读出来全是杂项，别在那里等。",
                 fontSize = 11.sp,
                 color = palette.sub,
@@ -1769,93 +1802,32 @@ fun AdvancedScreen(
                 ) { Text("拉取会话列表") }
                 Text(pullInfo, fontSize = 11.sp, color = palette.sub, modifier = Modifier.weight(1f))
             }
-            val todo = cands.filter { it !in d.whitelist }.sorted()
-            val shown = todo.take(24)
-            if (todo.isEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    if (cands.isEmpty()) {
-                        if (reqAt > 0L) "还没收到候选 —— 看完左边那行字再决定下一步（把它的内容发我）。"
-                        else "还没收到候选 —— 点上面的按钮，然后去微信首页 / 通讯录停两秒。"
-                    } else {
-                        "候选（${cands.size} 个）都已经加进去了。"
-                    },
-                    fontSize = 11.sp,
-                    color = palette.sub,
-                )
-            } else {
-                Spacer(Modifier.height(6.dp))
-                Text("还没加进去的（${todo.size}）：", fontSize = 11.sp, color = palette.sub)
-                if (candPicking) {
-                    PickBar(
-                        count = candPicked.size,
-                        total = shown.size,
-                        palette = palette,
-                        primaryLabel = "加入白名单",
-                        onPrimary = {
-                            val add = candPicked
-                            saveWhitelist(d.whitelistEnabled, d.whitelist + add)
-                            store.unignoreChats(add)
-                            ignoredCount = store.chatIgnored().size
-                            whitelistNote = "已加入 ${add.size} 个"
-                            candPicked = emptySet()
-                            candPicking = false
-                        },
-                        dangerLabel = "删除（不再出现）",
-                        onDanger = {
-                            val gone = candPicked
-                            store.ignoreChats(gone)
-                            ignoredCount = store.chatIgnored().size
-                            whitelistNote = "已删除 ${gone.size} 个杂项 —— 以后拉取不会再冒出来"
-                            candPicked = emptySet()
-                            candPicking = false
-                        },
-                        onSelectAll = {
-                            candPicked = if (candPicked.size == shown.size) emptySet() else shown.toSet()
-                        },
-                        onCancel = {
-                            candPicked = emptySet()
-                            candPicking = false
-                        },
-                    )
-                    Spacer(Modifier.height(6.dp))
-                }
-                shown.forEach { name ->
-                    PickRow(
-                        label = name,
-                        picking = candPicking,
-                        selected = name in candPicked,
-                        palette = palette,
-                        actionLabel = "加入",
-                        actionColor = palette.primary,
-                        onToggle = {
-                            candPicked = if (name in candPicked) candPicked - name else candPicked + name
-                        },
-                        onLongPress = {
-                            candPicking = true
-                            candPicked = candPicked + name
-                        },
-                        onAction = {
-                            saveWhitelist(d.whitelistEnabled, d.whitelist + name)
-                            store.unignoreChats(setOf(name))
-                            ignoredCount = store.chatIgnored().size
-                            whitelistNote = "已加入「$name」"
-                        },
-                    )
-                }
-                if (todo.size > 24) {
+            val todo = cands.filter { it !in d.whitelist }
+            Spacer(Modifier.height(10.dp))
+            // 名单本身搬到二级页了：拉到几十个名字时铺在卡里会把整页撑得很长，也没法搜。
+            // 这里只留一个入口 + 数量。
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(palette.primary.copy(alpha = 0.12f))
+                    .clickable { onOpenCandidates() }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("拉取到的联系人（${cands.size}）", fontSize = 14.sp, color = palette.text)
                     Text(
-                        "还有 ${todo.size - 24} 个没列出来 —— 把上面这些加完再回来。",
+                        when {
+                            cands.isEmpty() -> "还没收到候选 —— 点上面的按钮，然后去微信首页 / 通讯录停两秒"
+                            todo.isEmpty() -> "拉回来的都加进去了 · 点开可以搜、也可以移出"
+                            else -> "还没加进去的 ${todo.size} 个 · 点开可以搜索、批量加入"
+                        },
                         fontSize = 11.sp,
                         color = palette.sub,
                     )
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "长按任意一项可多选，然后一次加入或删除。删除的杂项会被记下来，下次拉取不再出现。",
-                    fontSize = 11.sp,
-                    color = palette.sub,
-                )
+                Text("查看 ›", fontSize = 12.sp, color = palette.primary)
             }
             if (ignoredCount > 0) {
                 Spacer(Modifier.height(4.dp))
@@ -1955,6 +1927,284 @@ fun AdvancedScreen(
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
             ) { Text("进入诊断") }
+        }
+    }
+}
+
+// ================= 拉取到的联系人（设置 → 高级设置 → 白名单卡的二级页） =================
+
+/**
+ * 设置 → 高级设置 → 「拉取到的联系人」。
+ *
+ * 从微信读回来的会话名（候选）以前直接铺在白名单卡里：一次只列 24 条、也没法搜 ——
+ * 拉回来的名字一多，那一块就成了整页最长的一段。所以搬到单独一层：顶上一个搜索框，下面是完整名单。
+ *
+ * 名单**不因为「加入」而消失**：加进去的那条挪到下面的「已经在白名单里」那一段。
+ * 「微信里到底读到了谁」始终是一份看得全的名单，比「加一个少一个」好找。
+ */
+@Composable
+fun ChatCandidatesScreen(
+    store: ConfigStore,
+    ui: ConfigData,
+    onSaved: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val palette = LocalPalette.current
+    var d by remember { mutableStateOf(ui) }
+    var note by remember { mutableStateOf<String?>(null) }
+    var query by remember { mutableStateOf("") }
+    var picking by remember { mutableStateOf(false) }
+    var picked by remember { mutableStateOf(emptySet<String>()) }
+    var ignoredCount by remember { mutableStateOf(store.chatIgnored().size) }
+
+    // 候选是注入侧用广播回传的，这一页不会自己重组 —— 停在这里时每 1.5 秒自己看一眼。
+    // 轮询**有上限**（约 5 分钟），理由和白名单卡那边一样：别留一个永远挂着的定时任务，
+    // 也让渲染回归测试不会被一个无限协程挂住。
+    val pulled by produceState(initialValue = store.chatCandidates() to store.chatPullInfo()) {
+        repeat(200) {
+            kotlinx.coroutines.delay(1500)
+            value = store.chatCandidates() to store.chatPullInfo()
+        }
+    }
+    val cands = pulled.first
+    val reqAt = store.chatRequestAt()
+    val pullInfo = pulled.second.let { (info, at) ->
+        when {
+            at > reqAt -> info.ifBlank { "已收到回传" } + " · " + clockText(at)
+            reqAt > 0L -> "已请求 ${clockText(reqAt)} · 微信侧还没回过话"
+            else -> "还没拉过"
+        }
+    }
+
+    fun saveWhitelist(enabled: Boolean, chats: Set<String>) {
+        store.saveWhitelist(enabled, chats)
+        d = store.load()
+        // App 层的 ui 也要跟着刷新，否则回上一页看到的是旧名单（再点一次保存还会把它写回去）
+        onSaved()
+    }
+
+    val all = cands.sorted()
+    val todo = all.filter { it !in d.whitelist }
+    val added = all.filter { it in d.whitelist }
+    val hitTodo = filterNames(todo, query)
+    val hitAdded = filterNames(added, query)
+
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 120.dp)) {
+        item {
+            ScreenHeader("拉取到的联系人", "微信里读回来的名单 · 点一下加入白名单") {
+                HeaderButton("← 返回", onBack)
+            }
+        }
+
+        item {
+            GlassCard(d.glassAlpha) {
+                Text("搜索", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text(
+                    "拉回来的名字可能有几十个 —— 输一两个字就能筛出来（只筛这一页的名单）。",
+                    fontSize = 11.sp,
+                    color = palette.sub,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = {
+                        query = it
+                        // 边筛边选容易错位：一改搜索词就退出多选，重新选
+                        if (picking) {
+                            picking = false
+                            picked = emptySet()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("搜索名字") },
+                    singleLine = true,
+                )
+                if (!d.whitelistEnabled) {
+                    Spacer(Modifier.height(10.dp))
+                    WhiteCard {
+                        Text(
+                            "白名单现在是关着的",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFFB3261E),
+                        )
+                        Text(
+                            "这里加进去的名字，在开关打开之前都不会生效 —— " +
+                                "回上一页把「只对白名单里的聊天生效」打开。",
+                            fontSize = 11.sp,
+                            color = Color(0xFF55525E),
+                            modifier = Modifier.padding(top = 3.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = {
+                            store.requestChats()
+                            note = "已请求 · 回微信首页 / 通讯录停两秒，再回来看"
+                        },
+                        modifier = Modifier.height(44.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                    ) { Text("拉取会话列表") }
+                    Text(pullInfo, fontSize = 11.sp, color = palette.sub, modifier = Modifier.weight(1f))
+                }
+                note?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(it, fontSize = 11.sp, color = palette.ok)
+                }
+            }
+        }
+
+        if (picking) {
+            item {
+                GlassCard(d.glassAlpha, border = palette.primary.copy(alpha = 0.5f)) {
+                    PickBar(
+                        count = picked.size,
+                        total = hitTodo.size,
+                        palette = palette,
+                        primaryLabel = "加入白名单",
+                        onPrimary = {
+                            val add = picked
+                            saveWhitelist(d.whitelistEnabled, d.whitelist + add)
+                            store.unignoreChats(add)
+                            ignoredCount = store.chatIgnored().size
+                            note = "已加入 ${add.size} 个"
+                            picked = emptySet()
+                            picking = false
+                        },
+                        dangerLabel = "删除（不再出现）",
+                        onDanger = {
+                            val gone = picked
+                            store.ignoreChats(gone)
+                            ignoredCount = store.chatIgnored().size
+                            note = "已删除 ${gone.size} 个杂项 —— 以后拉取不会再冒出来"
+                            picked = emptySet()
+                            picking = false
+                        },
+                        onSelectAll = {
+                            picked = if (picked.size == hitTodo.size) emptySet() else hitTodo.toSet()
+                        },
+                        onCancel = {
+                            picked = emptySet()
+                            picking = false
+                        },
+                    )
+                }
+            }
+        }
+
+        item {
+            Text(
+                "还没加进去的（${todo.size}）" + if (query.isNotBlank()) " · 筛出 ${hitTodo.size} 个" else "",
+                fontSize = 12.sp,
+                color = palette.sub,
+                modifier = Modifier.padding(start = 30.dp, end = 30.dp, top = 10.dp, bottom = 4.dp),
+            )
+        }
+
+        if (hitTodo.isEmpty()) {
+            item {
+                GlassCard(d.glassAlpha) {
+                    Text(
+                        when {
+                            all.isEmpty() -> "这一页还是空的 —— 点上面的「拉取会话列表」，然后回微信首页 / 通讯录停两秒。"
+                            query.isNotBlank() -> "没搜到「${query.trim()}」—— 换个字试试，或者清空搜索框。"
+                            else -> "拉回来的 ${all.size} 个都已经加进白名单了。"
+                        },
+                        fontSize = 12.sp,
+                        color = palette.sub,
+                    )
+                }
+            }
+        }
+
+        items(hitTodo) { name ->
+            Box(Modifier.padding(horizontal = 30.dp)) {
+                PickRow(
+                    label = name,
+                    picking = picking,
+                    selected = name in picked,
+                    palette = palette,
+                    actionLabel = "加入",
+                    actionColor = palette.primary,
+                    onToggle = { picked = if (name in picked) picked - name else picked + name },
+                    onLongPress = {
+                        picking = true
+                        picked = picked + name
+                    },
+                    onAction = {
+                        saveWhitelist(d.whitelistEnabled, d.whitelist + name)
+                        store.unignoreChats(setOf(name))
+                        ignoredCount = store.chatIgnored().size
+                        note = "已加入「$name」"
+                    },
+                )
+            }
+        }
+
+        if (hitAdded.isNotEmpty()) {
+            item {
+                Text(
+                    "已经在白名单里的（${added.size}）" + if (query.isNotBlank()) " · 筛出 ${hitAdded.size} 个" else "",
+                    fontSize = 12.sp,
+                    color = palette.sub,
+                    modifier = Modifier.padding(start = 30.dp, end = 30.dp, top = 14.dp, bottom = 4.dp),
+                )
+            }
+            items(hitAdded) { name ->
+                Box(Modifier.padding(horizontal = 30.dp)) {
+                    PickRow(
+                        label = name,
+                        picking = false,
+                        selected = false,
+                        palette = palette,
+                        actionLabel = "移出",
+                        actionColor = palette.bad,
+                        onToggle = {},
+                        onLongPress = {},
+                        onAction = {
+                            saveWhitelist(d.whitelistEnabled, d.whitelist - name)
+                            note = "已移出「$name」"
+                        },
+                    )
+                }
+            }
+        }
+
+        item {
+            Column(Modifier.padding(horizontal = 30.dp, vertical = 10.dp)) {
+                Text(
+                    "长按任意一项可多选，然后一次加入或删除。删除的杂项会被记下来，下次拉取不再出现。",
+                    fontSize = 11.sp,
+                    color = palette.sub,
+                )
+                if (ignoredCount > 0) {
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "已忽略 $ignoredCount 个（删掉的杂项）",
+                            fontSize = 11.sp,
+                            color = palette.sub,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            "恢复",
+                            fontSize = 12.sp,
+                            color = palette.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    store.clearIgnored()
+                                    ignoredCount = 0
+                                    note = "已恢复：删掉的候选下次拉取会重新出现"
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -2695,30 +2945,35 @@ private fun buildDiagZip(context: Context, store: ConfigStore, cfg: ConfigData):
 }
 
 /**
- * 白底公告栏。
+ * 「贴在界面上的纸条」：白底 + 深色字、完全不透明，扫一眼就能读到，不会和背景混在一起。
  *
- * 和玻璃卡片刻意不同：玻璃是「界面的一部分」，公告栏是**贴在界面上的纸条** ——
- * 白底 + 深色字、完全不透明，扫一眼就能读到，不会和背景混在一起。
+ * 和玻璃卡片刻意不同 —— 玻璃是界面的一部分，白卡是**说明书 / 公告**：说明、注意事项、
+ * 延迟数字这类「要看清」的东西用它；能塞进玻璃卡的普通内容就别用，不然整页会花。
  */
 @Composable
-fun NoticeBanner(title: String, lines: List<String>) {
-    Box(
-        Modifier
+fun WhiteCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(Color.White)
             .padding(12.dp),
-    ) {
-        Column {
-            Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFF1C1B22))
-            lines.forEach { line ->
-                Text(
-                    line,
-                    fontSize = 11.sp,
-                    color = Color(0xFF55525E),
-                    modifier = Modifier.padding(top = 3.dp),
-                )
-            }
+        content = content,
+    )
+}
+
+/** 白底公告栏：一行标题 + 若干行小字（[WhiteCard] 的一种用法）。 */
+@Composable
+fun NoticeBanner(title: String, lines: List<String>) {
+    WhiteCard {
+        Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFF1C1B22))
+        lines.forEach { line ->
+            Text(
+                line,
+                fontSize = 11.sp,
+                color = Color(0xFF55525E),
+                modifier = Modifier.padding(top = 3.dp),
+            )
         }
     }
 }

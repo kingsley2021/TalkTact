@@ -3,6 +3,7 @@ package dev.goutou.wingman
 import dev.goutou.wingman.wechat.MIN_CHAT_ROWS
 import dev.goutou.wingman.wechat.NameCandidate
 import dev.goutou.wingman.wechat.RowShape
+import dev.goutou.wingman.wechat.filterNames
 import dev.goutou.wingman.wechat.isRowNoise
 import dev.goutou.wingman.wechat.pickRowName
 import org.junit.Assert.assertEquals
@@ -127,5 +128,26 @@ class ConvNamesTest {
         // 必须「标签 + 冒号」才是字段行；单独出现的人名/群名照旧算名字
         assertEquals("备注", pickRowName(listOf(NameCandidate("备注", 42f, 100, 200))))
         assertEquals("来源不明的群", pickRowName(listOf(NameCandidate("来源不明的群", 42f, 100, 200))))
+    }
+
+    @Test
+    fun `搜索过滤：空查询原样返回`() {
+        val all = listOf("妈妈", "老张", "项目群")
+        assertEquals(all, filterNames(all, ""))
+        assertEquals(all, filterNames(all, "   "))
+    }
+
+    @Test
+    fun `搜索过滤：包含匹配 忽略大小写 保持原顺序`() {
+        val all = listOf("Alice", "bob", "ALIEN", "老张")
+        assertEquals(listOf("Alice", "ALIEN"), filterNames(all, "al"))
+        assertEquals(listOf("bob"), filterNames(all, "BOB"))
+        // 前后空格不算内容
+        assertEquals(listOf("老张"), filterNames(all, "  老张 "))
+    }
+
+    @Test
+    fun `搜索过滤：没命中就是空`() {
+        assertTrue(filterNames(listOf("妈妈", "老张"), "群").isEmpty())
     }
 }

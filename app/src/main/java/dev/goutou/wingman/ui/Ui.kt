@@ -734,7 +734,7 @@ fun App(store: ConfigStore) {
     var tab by remember { mutableIntStateOf(0) }
     // 「角色」的二级页（打开了某个人）也放在这一层：切走 tab 再回来时能回到原位
     var roleOpen by remember { mutableStateOf<String?>(null) }
-    // 「设置」这条线上现在有三层：设置(0) → 高级设置(1) → 诊断(2)
+    // 「设置」这条线上现在有四层：设置(0) → 高级设置(1) → 诊断(2) / 拉取到的联系人(3)
     var settingsPage by remember { mutableIntStateOf(0) }
     // 只关心「影响外观」的那几个字段：玻璃透明度/模糊、背景
     var ui by remember { mutableStateOf(store.load()) }
@@ -796,10 +796,18 @@ fun App(store: ConfigStore) {
                                 ui = ui,
                                 onSaved = { ui = store.load() },
                                 onOpenDiag = { settingsPage = 2 },
+                                onOpenCandidates = { settingsPage = 3 },
                                 onBack = { settingsPage = 0 },
                             )
                             // 诊断从「高级设置」里进，所以返回也应该回到高级设置
                             2 -> DiagScreen(store, ui.glassAlpha) { settingsPage = 1 }
+                            // 「拉取到的联系人」也是从高级设置里进的（白名单卡），返回同理
+                            3 -> ChatCandidatesScreen(
+                                store = store,
+                                ui = ui,
+                                onSaved = { ui = store.load() },
+                                onBack = { settingsPage = 1 },
+                            )
                             else -> SettingsScreen(
                                 store = store,
                                 ui = ui,
