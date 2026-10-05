@@ -1,11 +1,24 @@
-# TalkTact · 微信聊天助手（LSPosed 模块）
+# TalkTact · 微信聊天助手（Xposed 模块）
 
 在微信聊天页顶部悬浮一张卡片：读最近几条消息 → 调 LLM → 给 3 条风格不同的候选回复 → **点一下填入输入框**（不会自动发送）。
 
-当前版本 **v0.7.0**。对 v0.1 的重写说明见 [IMPROVEMENTS.md](IMPROVEMENTS.md)，历次改动见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v0.7.1**。对 v0.1 的重写说明见 [IMPROVEMENTS.md](IMPROVEMENTS.md)，历次改动见 [CHANGELOG.md](CHANGELOG.md)。
 
-> **框架要求**：v0.7.0 起模块改用 libxposed Modern API 102（`minApiVersion=102`），
-> 需要框架本身提供 API 102。框架版本低于这个要求时，模块会显示为不兼容、不会加载。
+## 兼容的框架
+
+v0.7.0 起本模块改用 **libxposed Modern API 102**（`minApiVersion=102`），因此框架本身必须提供 API 102：
+
+| 框架 | 情况 |
+|---|---|
+| **LSPosed / Vector** | ✅ 需要框架提供 libxposed API 102。框架版本不够时模块会显示为不兼容、根本不会加载 —— 先升级框架。 |
+| **NPatch**（免 root） | ✅ 支持现代 API 102，可直接使用。 |
+| **原版 LSPatch** | ❌ 不支持。它 2023-12 就已归档，比 libxposed 现代 API 还早，加载器只认 legacy 的 `assets/xposed_init` —— 对现代模块来说它"根本不认"。请改用 NPatch。 |
+
+> 免 root 路线（NPatch）是"给目标 APK 打补丁"：作用域在打补丁时选，不走模块里的 `scope.list`；
+> 而且要**先把微信本身 patch 出来能正常登录**，再谈模块。
+
+> 想在状态页看到「框架已把模块注入本应用」，可以把本模块自己也勾进作用域；不勾也不影响使用
+> （状态页会退回到「框架已连上本模块」或「微信进程里跑过本模块」）。
 
 ## 功能
 

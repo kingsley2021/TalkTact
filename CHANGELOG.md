@@ -19,6 +19,15 @@ App 进程（那是 New XSharedPreferences 机制的一部分）。
 
 顺带把提示文案从「LSPosed 已加载」改成中性的「框架」，不再绑死某一个框架。
 
+### 框架兼容性写进文档（原版 LSPatch 走不通）
+
+- **LSPosed / Vector**：v0.7.0 起需要框架提供 libxposed API 102，版本不够时不加载。
+- **NPatch**（免 root）：支持现代 API 102，可直接用。
+- **原版 LSPatch**：不支持。它 2023-12 已归档，比 libxposed 现代 API 还早，加载器只认 legacy 的
+  `assets/xposed_init` —— 对现代模块来说它"根本不认"。请改用 NPatch。
+- 明确**不做** legacy 双模：那要再养一套 `IXposedHookLoadPackage` + `XC_MethodHook` +
+  `XSharedPreferences` 实现，只为兼容一个停更三年的框架，不值。
+
 ## v0.7.0
 
 **整体迁移到 libxposed Modern API 102（消除框架的「已废弃 API」警告）**

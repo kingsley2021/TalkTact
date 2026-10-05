@@ -14,7 +14,8 @@
 ## 环境要求
 
 - **Android 12 及以上（API 31+）**。液态玻璃面板背后的真实背景模糊用的是 `Modifier.blur`（底层 `RenderEffect`），这个能力从 Android 12 才有。
-- LSPosed / Vector——**需要框架提供 libxposed API 102**。本模块使用 libxposed Modern API：`io.github.libxposed:api:102.0.0` + `minApiVersion=102`；框架版本不够时模块会显示为不兼容、不会加载。
+- **需要框架提供 libxposed API 102**：LSPosed / Vector，或免 root 的 **NPatch** 都可以。本模块使用 libxposed Modern API（`io.github.libxposed:api:102.0.0`，`minApiVersion=102`）；框架版本不够时模块会显示为不兼容、不会加载。
+- **不支持原版 LSPatch**：它 2023-12 已停止维护，只认 legacy 模块，请改用它的继任者 NPatch。
 - 微信 **8.0.78** 上验证通过。
 
 ## 安装
