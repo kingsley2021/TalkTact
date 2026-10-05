@@ -66,6 +66,10 @@ import dev.goutou.wingman.wechat.Sensitive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.goutou.wingman.config.SELF_ROLE_KEY
+import dev.goutou.wingman.llm.StyleSkill
+import dev.goutou.wingman.style.SelfStyle
+import kotlin.math.roundToInt
 
 private enum class Level(val label: String) { OK("通过"), WARN("待确认"), BAD("有问题") }
 
@@ -714,7 +718,7 @@ fun SettingsScreen(
             Slider(value = d.glassAlpha, onValueChange = { update(d.copy(glassAlpha = it)) }, valueRange = 0.3f..1f)
             Spacer(Modifier.height(4.dp))
             Text(
-                "玻璃背景模糊：${d.glassBlur.toInt()}dp（面板背后是真·背景模糊，配了自定义背景图才看得出来）",
+                "玻璃背景模糊：${d.glassBlur.toInt()}dp（面板背后是这张背景图的真实模糊，调到 0 就没有玻璃感了）",
                 fontSize = 12.sp,
                 color = palette.sub,
             )
@@ -736,10 +740,16 @@ fun SettingsScreen(
                     shape = RoundedCornerShape(14.dp),
                 ) { Text("恢复默认背景") }
             }
-            if (d.bgUri.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Text("已设置自定义背景：玻璃面板背后会对它做真实的背景模糊（RenderEffect）。", fontSize = 11.sp, color = palette.sub)
-            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (d.bgUri.isNotBlank()) {
+                    "已设置自定义背景：玻璃面板背后会对它做真实的背景模糊 + 折射。"
+                } else {
+                    "当前用的是内置背景图；选一张自己的图就会替换掉它，点「恢复默认背景」可以换回来。"
+                },
+                fontSize = 11.sp,
+                color = palette.sub,
+            )
         }
 
         GlassCard(d.glassAlpha) {
@@ -964,15 +974,34 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
         }
 
         roles.forEach { role ->
-            GlassCard(glassAlpha, border = palette.primary.copy(alpha = if (role.relation.isBlank()) 0.15f else 0.5f)) {
+            val self = role.key == SELF_ROLE_KEY
+            GlassCard(
+                glassAlpha,
+                border = when {
+                    // 「本人」用微信里「自己发的那条」的那个绿，一眼看出是「我」
+                    self -> palette.ok.copy(alpha = 0.55f)
+                    role.relation.isBlank() -> palette.primary.copy(alpha = 0.15f)
+                    else -> palette.primary.copy(alpha = 0.5f)
+                },
+            ) {
                 Column(
                     Modifier.fillMaxWidth().combinedClickable(
                         onClick = { onOpen(role.key) },
-                        onLongClick = { pendingDelete = role.key },
+                        // 「本人」不给删：它是常驻条目，删了也会立刻回来（见 Roles.withSelf）
+                        onLongClick = { if (!self) pendingDelete = role.key },
                     ),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(role.name, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = palette.text, modifier = Modifier.weight(1f, fill = false))
+                        if (self) {
+                            Box(Modifier.size(8.dp).clip(CircleShape).background(palette.ok))
+                        }
+                        Text(
+                            role.name,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (self) palette.ok else palette.text,
+                            modifier = Modifier.padding(start = if (self) 6.dp else 0.dp).weight(1f, fill = false),
+                        )
                         if (role.renamed) {
                             Text(
                                 " ◦ 识别名 ${role.key.take(10)}",
@@ -986,9 +1015,20 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                         Text("${role.msgs.size} 条", fontSize = 12.sp, color = palette.sub)
                     }
                     Text(
-                        if (role.relation.isBlank()) "还没写 TA 是你什么人" else "${role.relation}${if (role.note.isBlank()) "" else " · ${role.note.take(18)}"}",
+                        when {
+                            self && store.selfStyleEnabled() && store.selfSkill().isNotBlank() ->
+                                "说话风格 skill：已开启 · ${formatTime(store.selfSkillAt())} 生成"
+                            self && store.selfStyleEnabled() -> "说话风格 skill：已开启（还没生成）"
+                            self -> "说话风格 skill：未开启（点进去打开）"
+                            role.relation.isBlank() -> "还没写 TA 是你什么人"
+                            else -> "${role.relation}${if (role.note.isBlank()) "" else " · ${role.note.take(18)}"}"
+                        },
                         fontSize = 12.sp,
-                        color = if (role.relation.isBlank()) palette.warn else palette.primary,
+                        color = when {
+                            self -> palette.ok
+                            role.relation.isBlank() -> palette.warn
+                            else -> palette.primary
+                        },
                     )
                     Text(
                         "最近一条：${if (role.lastAt > 0) formatTime(role.lastAt) else "—"}",
@@ -1027,6 +1067,11 @@ private fun RoleDetail(
     onBack: () -> Unit,
     onRename: (String) -> Unit,
 ) {
+    // 「本人」这条没有「TA 是你什么人」，它管的是另一件事（我的说话风格），单独一页
+    if (role.key == SELF_ROLE_KEY) {
+        SelfStyleDetail(store, glassAlpha)
+        return
+    }
     val palette = LocalPalette.current
     var relation by remember(role.key) { mutableStateOf(role.relation) }
     var note by remember(role.key) { mutableStateOf(role.note) }
@@ -1179,5 +1224,168 @@ private fun RoleDetail(
             },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("取消") } },
         )
+    }
+}
+
+
+/**
+ * 「本人」这条的详情页。
+ *
+ * 和其它角色最大的不同：这里没有「TA 是你什么人 / 平时的关系」，只有一个开关 +
+ * 现在的状态 + 手动生成。因为这条线的产出不是"关系描述"，而是一份**说话风格档案**。
+ */
+@Composable
+private fun SelfStyleDetail(store: ConfigStore, glassAlpha: Float) {
+    val palette = LocalPalette.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var tick by remember { mutableStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf<String?>(null) }
+    val on = remember(tick) { store.selfStyleEnabled() }
+    var hour by remember(tick) { mutableStateOf(store.selfStyleHour()) }
+    val samples = remember(tick) { StyleSkill.count(store.selfSamples()) }
+    val skill = remember(tick) { store.selfSkill() }
+    val skillAt = remember(tick) { store.selfSkillAt() }
+
+    LazyColumn(Modifier.fillMaxSize()) {
+        item { ScreenHeader("本人", "我的说话风格") }
+
+        item {
+            GlassCard(glassAlpha) {
+                Text("这是干什么的", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text(
+                    "把「你自己发出去的话」攒起来，每天在你设定的时间交给模型提炼成一份说话风格档案。\n" +
+                        "「军师」生成候选回复时会参考它 —— 回复就会更像你平时说话的样子。\n\n" +
+                        "关掉之后：不再采集、不再生成，也不再使用（已经生成的那份留着，重新打开立刻可用）；\n" +
+                        "已经攒下的原始记录会被清掉。\n" +
+                        "样本只在你打开聊天页时才读得到，所以是「你在场时看到的那几句」慢慢攒起来的。",
+                    fontSize = 12.sp,
+                    color = palette.sub,
+                )
+            }
+        }
+
+        item {
+            GlassCard(glassAlpha, border = if (on) palette.ok.copy(alpha = 0.5f) else null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "把我的说话风格做成 skill",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = palette.text,
+                        )
+                        Text(
+                            if (on) "已开启：会采集我说的话" else "未开启：不采集、不生成、不存储",
+                            fontSize = 12.sp,
+                            color = if (on) palette.ok else palette.sub,
+                        )
+                    }
+                    GlassPill(if (on) "已开启" else "开启", selected = on) {
+                        val next = !on
+                        store.setSelfStyleEnabled(next)
+                        // 开关和定时任务是绑在一起的：开了才排任务，关了立刻撤掉
+                        if (next) SelfStyle.schedule(context, hour) else SelfStyle.cancel(context)
+                        msg = null
+                        tick++
+                    }
+                }
+            }
+        }
+
+        item {
+            GlassCard(glassAlpha) {
+                Text(
+                    "每天什么时候生成",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = palette.text,
+                )
+                Text(
+                    "现在是 ${"$hour".padStart(2, '0')}:00 —— 0 点到 23 点里挑都行。" +
+                        if (on) "改完立刻生效（按新的时间重新排）。" else "打开上面的开关后按这个时间跑。",
+                    fontSize = 12.sp,
+                    color = palette.sub,
+                )
+                Slider(
+                    value = hour.toFloat(),
+                    onValueChange = {
+                        val h = it.roundToInt().coerceIn(0, 23)
+                        if (h != hour) {
+                            hour = h
+                            store.setSelfStyleHour(h)
+                        }
+                    },
+                    // 改完再重排：拖动过程中每变一格都去动 WorkManager 太浪费
+                    onValueChangeFinished = { if (on) SelfStyle.schedule(context, hour) },
+                    valueRange = 0f..23f,
+                    steps = 22,
+                )
+            }
+        }
+
+        item {
+            GlassCard(glassAlpha) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StatCell("$samples", "条样本", Modifier.weight(1f))
+                    StatCell(if (skillAt > 0) formatTime(skillAt) else "—", "上次生成", Modifier.weight(1f))
+                }
+                if (skill.isBlank()) {
+                    Text(
+                        "还没有生成过。攒够 ${StyleSkill.MIN_SAMPLES} 条样本之后，可以点下面手动生成一次（不用等到中午）。",
+                        fontSize = 12.sp,
+                        color = palette.sub,
+                        modifier = Modifier.padding(top = 10.dp),
+                    )
+                } else {
+                    Text(
+                        "当前 skill（生成回复时会带上）",
+                        fontSize = 12.sp,
+                        color = palette.sub,
+                        modifier = Modifier.padding(top = 10.dp),
+                    )
+                    Text(
+                        skill,
+                        fontSize = 12.sp,
+                        color = palette.text,
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(palette.glass.copy(alpha = 0.22f))
+                            .padding(10.dp),
+                    )
+                }
+                msg?.let {
+                    Text(it, fontSize = 12.sp, color = palette.primary, modifier = Modifier.padding(top = 8.dp))
+                }
+                Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GlassPill(if (busy) "生成中…" else "立即生成", selected = false) {
+                        if (busy) return@GlassPill
+                        busy = true
+                        msg = null
+                        scope.launch {
+                            val r = withContext(Dispatchers.IO) {
+                                runCatching { SelfStyle.generateNow(store) }
+                            }
+                            busy = false
+                            msg = r.fold({ it }, { it.message ?: "生成失败" })
+                            tick++
+                        }
+                    }
+                    if (samples > 0) {
+                        GlassPill("清空样本", selected = false) {
+                            store.clearRoleMsgs(SELF_ROLE_KEY)
+                            msg = "已清空采集到的样本"
+                            tick++
+                        }
+                    }
+                }
+            }
+        }
+
+        // 底部导航是浮在上面的，留出空位免得被它挡住
+        item { Spacer(Modifier.height(110.dp)) }
     }
 }

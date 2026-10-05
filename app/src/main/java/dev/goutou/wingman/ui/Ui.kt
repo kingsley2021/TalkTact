@@ -2,13 +2,20 @@ package dev.goutou.wingman.ui
 
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.graphics.RenderEffect
+import android.graphics.RuntimeShader
 import android.net.Uri
+import android.os.Build
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,6 +25,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,6 +34,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -45,31 +54,41 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -77,6 +96,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.goutou.wingman.ModuleStatus
+import dev.goutou.wingman.R
 import dev.goutou.wingman.config.ConfigData
 import dev.goutou.wingman.config.RemoteSync
 import dev.goutou.wingman.config.ConfigStore
@@ -86,6 +106,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
@@ -175,6 +196,92 @@ val LocalBackdrop = staticCompositionLocalOf {
 /** 根容器尺寸（px）。玻璃面板靠它把整屏背景平移对齐到自己身上。 */
 val LocalRootSize = staticCompositionLocalOf { IntSize.Zero }
 
+/**
+ * 玻璃扫光的相位（0..1 一轮）。
+ *
+ * 单独做成一个持有者、而不是塞进 [Backdrop]：动画推进时会让读到它的组件重组，
+ * 而 [Backdrop] 是所有玻璃面板都在读的 —— 那样每帧都会重组整屏。
+ * 装在这里，配合「只在 draw 阶段读取」的写法，推进相位只会重画，不会重组。
+ *
+ * 镜面扫光与折射共用同一个相位，所以它们是同一个时钟，不会各动各的。
+ */
+private class GlassPhase {
+    var phase by mutableFloatStateOf(0f)
+}
+
+private val LocalGlassPhase = staticCompositionLocalOf { GlassPhase() }
+
+/**
+ * 一支 AGSL 折射着色器（对应 liquidGL 的 refraction + aberration + bevel）。
+ *
+ * 只说一句实话：这是整次改造里**唯一没法在这儿验证**的部分 —— 着色器是运行时编译的，
+ * 编译不过只会在真机上抛异常。所以全都包了 try/catch：任何一步出问题都返回 null，
+ * 上层自动退回「模糊 / 只染色」，最坏情况只是没有折射，不会崩。
+ *
+ * 需要 API 33+（RuntimeShader）。minSdk 是 31，31/32 直接走降级。
+ */
+private const val AGSL_GLASS = """
+uniform shader uBackdrop;
+uniform float2 uSize;
+uniform float uRadius;
+uniform float uStrength;
+uniform float uAberration;
+
+half4 main(float2 fragCoord) {
+    float2 c = uSize * 0.5;
+    float2 p = fragCoord - c;
+    float m = min(uSize.x, uSize.y);
+    float r = min(uRadius, m * 0.5);
+    // 圆角矩形 SDF：面板内部为负、边缘为 0、外部为正
+    float2 q = abs(p) - c + float2(r, r);
+    float sd = min(max(q.x, q.y), 0.0) + length(max(q, float2(0.0, 0.0))) - r;
+    // t: 边缘 0 → 内部 1
+    float t = clamp(-sd / (m * 0.24), 0.0, 1.0);
+    // 近似外法线；加个极小量避免正中心取到 0 向量
+    float2 n = normalize(p + float2(0.0001, 0.0001));
+    // 越靠边位移越大 —— 斜面折射就是这个平方衰减
+    float k = (1.0 - t) * (1.0 - t) * uStrength * m;
+    float2 uv = fragCoord - n * k;
+    // 色散：R / B 往两边错开一点点采样
+    float ab = uAberration * m * (1.0 - t);
+    half3 col;
+    col.r = uBackdrop.eval(uv + n * ab).r;
+    col.g = uBackdrop.eval(uv).g;
+    col.b = uBackdrop.eval(uv - n * ab).b;
+    // 斜面上一圈冷白高光
+    float rim = pow(1.0 - t, 5.0);
+    col += half3(0.55, 0.60, 0.75) * rim * 0.30;
+    return half4(col, 1.0);
+}
+"""
+
+private class AgslGlass {
+    private val shader: RuntimeShader? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            try { RuntimeShader(AGSL_GLASS) } catch (t: Throwable) { null }
+        } else null
+
+    /** 尺寸 → RenderEffect 的缓存：尺寸不变的场景下不用反复创建。 */
+    private val cache = HashMap<Long, RenderEffect?>()
+
+    val available: Boolean get() = shader != null
+
+    fun effect(w: Int, h: Int): RenderEffect? {
+        val sh = shader ?: return null
+        if (w <= 0 || h <= 0) return null
+        return cache.getOrPut((w.toLong() shl 32) or h.toLong()) {
+            try {
+                sh.setFloatUniform("uSize", w.toFloat(), h.toFloat())
+                sh.setFloatUniform("uRadius", min(w, h) * 0.30f)
+                // 3.2% 短边：看得出边缘弯折，又不至于把背景图案揉变形
+                sh.setFloatUniform("uStrength", 0.032f)
+                sh.setFloatUniform("uAberration", 0.006f)
+                RenderEffect.createRuntimeShaderEffect(sh, "uBackdrop")
+            } catch (t: Throwable) { null }
+        }
+    }
+}
+
 @Composable
 fun GoutouTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
@@ -197,7 +304,10 @@ fun GoutouTheme(content: @Composable () -> Unit) {
  * 把「整屏背景」画一遍。
  *
  * 调用方负责先把坐标系平移到目标区域（面板）再裁剪，所以同一个函数既能画最底层背景，
- * 也能画出「面板背后那块背景」——后者再套一层 blur 就是真实的玻璃。
+ * 也能画出「面板背后那块背景」—— 后者再套一层折射 / 模糊就是真实的玻璃。
+ *
+ * 背景就是**一张图**：内置的默认图，或者用户在设置里自己选的那张（选了就以他的为准）。
+ * 固定底色渐变永远压在最下面 —— 图还没解码完、或者某天换成一张很亮的图时，兜住文字对比度。
  */
 private fun DrawScope.drawBackdropArt(b: Backdrop, w: Float, h: Float) {
     drawRect(
@@ -205,39 +315,62 @@ private fun DrawScope.drawBackdropArt(b: Backdrop, w: Float, h: Float) {
         topLeft = Offset.Zero,
         size = Size(w, h),
     )
-    val img = b.bitmap
-    if (img != null) {
-        // 等价于 ContentScale.Crop：按「铺满」的比例缩放后居中
-        val scale = max(w / img.width.toFloat(), h / img.height.toFloat())
-        val dw = (img.width * scale).roundToInt()
-        val dh = (img.height * scale).roundToInt()
-        drawImage(
-            image = img,
-            srcOffset = IntOffset.Zero,
-            srcSize = IntSize(img.width, img.height),
-            dstOffset = IntOffset(((w - dw) / 2f).roundToInt(), ((h - dh) / 2f).roundToInt()),
-            dstSize = IntSize(dw, dh),
-        )
-        drawRect(color = Color.Black.copy(alpha = b.dim), topLeft = Offset.Zero, size = Size(w, h))
-    } else {
-        // 默认背景：几团柔光，让玻璃面板背后有颜色层次可透
-        softGlow(b.primary.copy(alpha = 0.32f), w * 0.10f, h * 0.09f, w * 0.44f, w, h)
-        softGlow(Color(0xFF3BC8D8).copy(alpha = 0.26f), w * 0.85f, h * 0.20f, w * 0.38f, w, h)
-        softGlow(Color(0xFFF08BC0).copy(alpha = 0.22f), w * 0.30f, h * 0.33f, w * 0.34f, w, h)
-    }
-}
 
-private fun DrawScope.softGlow(color: Color, cx: Float, cy: Float, radius: Float, w: Float, h: Float) {
-    drawRect(
-        brush = Brush.radialGradient(listOf(color, Color.Transparent), center = Offset(cx, cy), radius = radius),
-        topLeft = Offset.Zero,
-        size = Size(w, h),
+    val img = b.bitmap ?: return
+    // 等价于 ContentScale.Crop：按「铺满」的比例缩放后居中
+    val scale = max(w / img.width.toFloat(), h / img.height.toFloat())
+    val dw = (img.width * scale).roundToInt()
+    val dh = (img.height * scale).roundToInt()
+    drawImage(
+        image = img,
+        srcOffset = IntOffset.Zero,
+        srcSize = IntSize(img.width, img.height),
+        dstOffset = IntOffset(((w - dw) / 2f).roundToInt(), ((h - dh) / 2f).roundToInt()),
+        dstSize = IntSize(dw, dh),
     )
+    drawRect(color = Color.Black.copy(alpha = b.dim), topLeft = Offset.Zero, size = Size(w, h))
 }
 
+/**
+ * 玻璃扫光的节奏（镜面扫光与折射共用同一个相位）。
+ *
+ * 想彻底关掉这层动画（比如觉得费电）把 [GLASS_SWEEP_ENABLED] 改成 false 就行 ——
+ * 玻璃的折射、高光、描边都还在，只是不再缓缓移动。
+ */
+private const val GLASS_SWEEP_ENABLED = true
+
+/** 一道扫光走完整屏的时长。够慢才是「流动」，短了就成了「闪烁」。 */
+private const val GLASS_SWEEP_PERIOD_MS = 26_000L
+
+/** 最短重绘间隔：扫光变化很慢，没必要跑满 60fps，省一半的电。 */
+private const val GLASS_SWEEP_MIN_FRAME_MS = 32L
+
+/**
+ * 背景层。
+ *
+ * 背景只有一张图（内置默认图，或者用户自选的那张），本身是静态的。这里唯一要做的事，
+ * 是推进「玻璃扫光」的相位：
+ * - 动画值只在**绘制阶段**读取（`drawBehind` 里的 `phase`），所以每帧只重画，
+ *   **不会触发重组**，玻璃面板不会被拖着一起重组。
+ * - 图还没解码完时只画底色渐变，不闪白也不闪黑。
+ */
 @Composable
 fun BackgroundLayer(backdrop: Backdrop) {
     val root = LocalRootSize.current
+    val phase = LocalGlassPhase.current
+
+    if (GLASS_SWEEP_ENABLED) {
+        LaunchedEffect(Unit) {
+            var last = 0L
+            while (true) {
+                val now = withFrameNanos { it }
+                if (now - last < GLASS_SWEEP_MIN_FRAME_MS * 1_000_000L) continue
+                last = now
+                phase.phase = (now / 1_000_000L % GLASS_SWEEP_PERIOD_MS) / GLASS_SWEEP_PERIOD_MS.toFloat()
+            }
+        }
+    }
+
     Spacer(
         Modifier
             .fillMaxSize()
@@ -259,12 +392,24 @@ private fun decodeImage(context: Context, uriStr: String): ImageBitmap? = try {
     null
 }
 
+/** 内置默认背景。跟着 APK 走，不要任何权限，也不会被系统清理掉。 */
+private val DEFAULT_BG_RES = R.drawable.bg_app
+
+private fun decodeRes(context: Context, resId: Int): ImageBitmap? = try {
+    BitmapFactory.decodeResource(context.resources, resId)?.asImageBitmap()
+} catch (t: Throwable) {
+    null
+}
+
 @Composable
 private fun decodeBackdrop(uriStr: String): ImageBitmap? {
     val context = LocalContext.current
     // 解码放到 IO 线程，避免切页时卡一下
     val bitmap by produceState<ImageBitmap?>(initialValue = null, uriStr) {
-        value = if (uriStr.isBlank()) null else withContext(Dispatchers.IO) { decodeImage(context, uriStr) }
+        value = withContext(Dispatchers.IO) {
+            // 没选自定义背景 → 用内置那张。现在「默认背景」本身就是一张图了。
+            if (uriStr.isBlank()) decodeRes(context, DEFAULT_BG_RES) else decodeImage(context, uriStr)
+        }
     }
     return bitmap
 }
@@ -291,24 +436,53 @@ fun GlassSurface(
     borderColor: Color? = null,
     tintTop: Float? = null,
     tintBottom: Float? = null,
+    refract: Boolean = true,
     onClick: (() -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val palette = LocalPalette.current
     val backdrop = LocalBackdrop.current
     val root = LocalRootSize.current
+    val phase = LocalGlassPhase.current
     var pos by remember { mutableStateOf(Offset.Zero) }
+    // 面板自身的像素尺寸：折射着色器要按它算 SDF 和折射位移。
+    // 用布局实测值而不是 graphicsLayer 作用域里的 size —— 后者的类型随版本变，
+    // 实测值既明确又一定是 px。
+    var panel by remember { mutableStateOf(IntSize.Zero) }
     val top = tintTop ?: (palette.glassTopAlpha * glassAlpha)
     val bottom = tintBottom ?: (palette.glassBottomAlpha * glassAlpha)
-    val hasBackdrop = backdrop.bitmap != null && root.width > 0 && root.height > 0 && backdrop.blur > 0.dp
+    val sized = root.width > 0 && root.height > 0
+    val hasImage = sized && backdrop.bitmap != null && backdrop.blur > 0.dp
+    val glass = remember { AgslGlass() }
+    // 折射只在「背景里有东西可折」时才做 —— 现在背景永远是一张图，所以就是 hasImage
+    val wantsRefraction = refract && hasImage
 
     Box(
         modifier
-            .onGloballyPositioned { pos = it.positionInRoot() }
+            .onGloballyPositioned {
+                pos = it.positionInRoot()
+                panel = it.size
+            }
             .clip(shape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
     ) {
-        if (hasBackdrop) {
+        if (wantsRefraction && glass.available) {
+            // ①a 真折射：先把「这一格背后的背景」画进图层，再让 AGSL 按边缘斜面把它折一下
+            Spacer(
+                Modifier
+                    .matchParentSize()
+                    .graphicsLayer {
+                        renderEffect = glass.effect(panel.width, panel.height)?.asComposeRenderEffect()
+                    }
+                    .clipToBounds()
+                    .drawBehind {
+                        withTransform({ translate(-pos.x, -pos.y) }) {
+                            drawBackdropArt(backdrop, root.width.toFloat(), root.height.toFloat())
+                        }
+                    },
+            )
+        } else if (hasImage) {
+            // ①b 降级路径：API < 33 或着色器编译失败时，退回原来的模糊
             Spacer(
                 Modifier
                     .matchParentSize()
@@ -321,17 +495,66 @@ fun GlassSurface(
                     },
             )
         }
+        // ② 玻璃染色
         Spacer(
             Modifier.matchParentSize().background(
                 Brush.verticalGradient(listOf(palette.glass.copy(alpha = top), palette.glass.copy(alpha = bottom))),
             ),
         )
+        // ③ 镜面扫光（liquidGL 的 specular）：一道很淡的斜光缓缓扫过。
+        //    相位由 BackgroundLayer 推，所以不需要额外动画驱动；只在 draw 阶段读，不触发重组。
+        if (GLASS_SWEEP_ENABLED) {
+            Spacer(
+                Modifier.matchParentSize().drawBehind {
+                    val p = (phase.phase * 2f) % 1f
+                    val band = size.width * 0.30f
+                    val cx = -band + (size.width + 2f * band) * p
+                    drawRect(
+                        brush = Brush.linearGradient(
+                            0f to Color.Transparent,
+                            0.5f to Color.White.copy(alpha = 0.085f * glassAlpha),
+                            1f to Color.Transparent,
+                            start = Offset(cx - band, -size.height * 0.35f),
+                            end = Offset(cx + band, size.height * 1.35f),
+                        ),
+                        size = size,
+                    )
+                },
+            )
+        }
+        // ④ 顶边一条极淡的高光
+        Spacer(
+            Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            Color.Transparent,
+                            Color.White.copy(alpha = 0.40f * glassAlpha),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
         content()
+        // ⑤ 边缘：报错卡片之类沿用纯色描边；其余用「左上亮、右下暗」的斜面渐变当 bevel
         Spacer(
             Modifier.matchParentSize().border(
-                1.dp,
-                borderColor ?: palette.glassBorder.copy(alpha = 0.55f * glassAlpha),
-                shape,
+                width = 1.dp,
+                brush = if (borderColor != null) {
+                    SolidColor(borderColor)
+                } else {
+                    Brush.linearGradient(
+                        0f to Color.White.copy(alpha = 0.60f * glassAlpha),
+                        0.45f to Color.White.copy(alpha = 0.08f * glassAlpha),
+                        1f to Color.White.copy(alpha = 0.34f * glassAlpha),
+                        start = Offset.Zero,
+                        end = Offset.Infinite,
+                    )
+                },
+                shape = shape,
             ),
         )
     }
@@ -349,7 +572,11 @@ fun GlassCard(
         shape = RoundedCornerShape(22.dp),
         glassAlpha = glassAlpha,
         borderColor = border,
-        modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 5.dp)
+            // 一点点外投影：让卡片从彩色背景上「浮」起来，而不是贴上去
+            .shadow(10.dp, RoundedCornerShape(22.dp), clip = false),
     ) {
         Column(Modifier.padding(16.dp), content = content)
     }
@@ -502,9 +729,11 @@ fun App(store: ConfigStore) {
             blur = ui.glassBlur.dp,
         )
 
+        val phase = remember { GlassPhase() }
         CompositionLocalProvider(
             LocalBackdrop provides backdrop,
             LocalRootSize provides rootSize,
+            LocalGlassPhase provides phase,
         ) {
             var contentAlpha by remember { mutableStateOf(0f) }
             LaunchedEffect(tab) {
@@ -553,6 +782,21 @@ fun App(store: ConfigStore) {
     }
 }
 
+private val NavShape = RoundedCornerShape(30.dp)
+private val NavIndicatorShape = RoundedCornerShape(20.dp)
+private val NavBarHeight = 62.dp
+
+/**
+ * 底部导航。
+ *
+ * 和上一版的区别：
+ * - 选中态从「每一格各自变色」改成**一整块会滑动的指示块**（弹簧跟随），切页时是连续的位移，
+ *   而不是两块背景直接交换；
+ * - 指示块用 `offset { }` 的 lambda 重载 → 只走布局阶段、不触发重组，滑动是满帧的；
+ * - 图标随选中进度缩放 + 变色，文字跟着变重；
+ * - 切页给一次轻触觉反馈，点起来「有实体感」；
+ * - 徽标外加了一圈底色，从玻璃上浮出来，不再糊在背景里。
+ */
 @Composable
 private fun NavBar(
     tab: Int,
@@ -562,6 +806,7 @@ private fun NavBar(
     onTab: (Int) -> Unit,
 ) {
     val palette = LocalPalette.current
+    val haptics = LocalHapticFeedback.current
     val items = listOf(
         "运行状态" to Icons.Filled.Pets,
         "试一试" to Icons.Filled.PlayArrow,
@@ -569,76 +814,139 @@ private fun NavBar(
         "角色" to Icons.Filled.Person,
         "设置" to Icons.Filled.Settings,
     )
+
+    var rowWidth by remember { mutableIntStateOf(0) }
+    val cellPx = if (rowWidth > 0) rowWidth.toFloat() / items.size else 0f
+    val slide = remember { Animatable(0f) }
+    LaunchedEffect(tab, cellPx) {
+        if (cellPx <= 0f) return@LaunchedEffect
+        slide.animateTo(tab.toFloat(), spring(dampingRatio = 0.76f, stiffness = Spring.StiffnessMediumLow))
+    }
+
     GlassSurface(
-        shape = RoundedCornerShape(28.dp),
+        shape = NavShape,
         glassAlpha = glassAlpha,
-        modifier = modifier,
+        modifier = modifier.shadow(18.dp, NavShape, clip = false),
     ) {
-        Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            items.forEachIndexed { index, (label, icon) ->
-                val selected = index == tab
-                val scale by animateFloatAsState(if (selected) 1f else 0.94f, tween(200))
-                Column(
+        Box(Modifier.fillMaxWidth().height(NavBarHeight)) {
+            if (cellPx > 0f) {
+                Box(
                     Modifier
-                        .weight(1f)
-                        .graphicsLayer { scaleX = scale; scaleY = scale }
-                        .clip(RoundedCornerShape(20.dp))
+                        .align(Alignment.CenterStart)
+                        .offset { IntOffset((slide.value * cellPx).roundToInt(), 0) }
+                        .width(with(LocalDensity.current) { cellPx.toDp() })
+                        .fillMaxHeight()
+                        .padding(horizontal = 3.dp, vertical = 5.dp)
+                        .clip(NavIndicatorShape)
                         .background(
-                            if (selected) {
-                                Brush.verticalGradient(
-                                    listOf(
-                                        palette.primary.copy(alpha = 0.22f),
-                                        palette.primary.copy(alpha = 0.10f),
-                                    ),
-                                )
-                            } else {
-                                Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent))
-                            },
+                            Brush.verticalGradient(
+                                listOf(
+                                    palette.primary.copy(alpha = 0.30f),
+                                    palette.primary.copy(alpha = 0.12f),
+                                ),
+                            ),
                         )
-                        .clickable { onTab(index) }
-                        .padding(vertical = 8.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Box {
-                        Icon(
-                            icon,
-                            contentDescription = label,
-                            tint = if (selected) palette.primary else palette.sub,
-                            modifier = Modifier.size(22.dp),
-                        )
-                        if (index == 0) {
-                            val badgeColor = when (health) {
-                                Health.OK -> palette.ok
-                                Health.WARN -> palette.warn
-                                Health.BAD -> palette.bad
+                        .border(1.dp, palette.primary.copy(alpha = 0.34f), NavIndicatorShape),
+                )
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .height(NavBarHeight)
+                    .onGloballyPositioned { rowWidth = it.size.width },
+            ) {
+                items.forEachIndexed { index, (label, icon) ->
+                    NavItem(
+                        label = label,
+                        icon = icon,
+                        selected = index == tab,
+                        palette = palette,
+                        badge = if (index == 0) health else null,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            if (index != tab) {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             }
-                            Box(
-                                Modifier
-                                    .align(Alignment.TopEnd)
-                                    .offset(x = 7.dp, y = (-5).dp)
-                                    .size(13.dp)
-                                    .clip(CircleShape)
-                                    .background(badgeColor),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    if (health == Health.BAD) Icons.Filled.Close else Icons.Filled.Check,
-                                    contentDescription = health.label,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(9.dp),
-                                )
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        label,
-                        fontSize = 10.sp,
-                        fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                        color = if (selected) palette.primary else palette.sub,
+                            onTab(index)
+                        },
                     )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun NavItem(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    palette: Palette,
+    badge: Health?,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    // 0 → 1 的「选中进度」，图标缩放/变色/字重都跟着它走，切换才有连续感
+    val p by animateFloatAsState(if (selected) 1f else 0f, tween(260))
+    val interaction = remember { MutableInteractionSource() }
+    val tint = lerp(palette.sub, palette.primary, p)
+
+    Column(
+        modifier
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(20.dp))
+            // 自带指示块了，所以不要涟漪 —— 否则会闪出一个和指示块不重合的方块
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .graphicsLayer {
+                val scale = 0.94f + 0.06f * p
+                scaleX = scale
+                scaleY = scale
+                translationY = -1.5f * p
+            },
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box {
+            Icon(
+                icon,
+                contentDescription = label,
+                tint = tint,
+                modifier = Modifier.size(21.dp + 2.dp * p),
+            )
+            if (badge != null) {
+                val badgeColor = when (badge) {
+                    Health.OK -> palette.ok
+                    Health.WARN -> palette.warn
+                    Health.BAD -> palette.bad
+                }
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 6.dp, y = (-5).dp)
+                        .size(14.dp)
+                        .clip(CircleShape)
+                        .background(palette.bgTop.copy(alpha = 0.90f))
+                        .padding(1.5.dp)
+                        .clip(CircleShape)
+                        .background(badgeColor),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        if (badge == Health.BAD) Icons.Filled.Close else Icons.Filled.Check,
+                        contentDescription = badge.label,
+                        tint = Color.White,
+                        modifier = Modifier.size(8.dp),
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            label,
+            fontSize = 10.sp,
+            letterSpacing = 0.2.sp,
+            fontWeight = if (p > 0.5f) FontWeight.SemiBold else FontWeight.Normal,
+            color = tint,
+        )
     }
 }
