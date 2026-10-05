@@ -313,7 +313,7 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
 
     LazyColumn(contentPadding = PaddingValues(bottom = 120.dp)) {
         item {
-            ScreenHeader("运行状态", "WeChat · 聊天副驾 ${appVersion(context)}") {
+            ScreenHeader("运行状态", "WeChat · 聊天助手 ${appVersion(context)}") {
                 HeaderButton("↻ 刷新") { tick++ }
                 Button(
                     onClick = onTrial,
