@@ -435,7 +435,14 @@ internal class Panel(private val a: Activity) {
 
         // A reused Activity can host different conversations with identical last messages.
         // Resolve the title before every content fast-path; a missing title never inherits the old name.
-        val observedName = Roles.normalizeKey(reader.findChatTitle(decor, list).orEmpty())
+        val observedRawName = Roles.normalizeKey(reader.findChatTitle(decor, list).orEmpty())
+        // 微信切换布局时标题控件可能短暂读空。已有会话遇到这个瞬态时，
+        // 保留当前上下文并等待下一轮，不能把它当成新会话清掉展开结果。
+        if (observedRawName.isBlank() && chatName.isNotBlank()) {
+            Trace.note("标题", "会话标题暂时为空，保留「$chatName」并等待下一轮")
+            return
+        }
+        val observedName = observedRawName
         val settings = conversationDigest(
             cfg.prompt, cfg.model, cfg.baseUrl, cfg.apiKey, cfg.model2, cfg.baseUrl2, cfg.apiKey2,
             cfg.graded.toString(), cfg.temperature.toString(), cfg.maxTokens.toString(),
