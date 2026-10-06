@@ -118,6 +118,9 @@ internal class Panel(private val a: Activity) {
     private var chipText = ""
 
     private var lastDiagAt = 0L
+    /** 自动回传决策轨迹的水位：上次真正发出去时的内容版本号 + 时间（见 [maybeSendTrace]）。 */
+    private var lastTraceVer = -1
+    private var lastTraceAt = 0L
     private var lastDiagReq = 0L
     private var emptyNotified = false
     /** 「白名单开着但认不出这个会话的名字」只提示一次，免得每屏都弹。 */
@@ -147,9 +150,34 @@ internal class Panel(private val a: Activity) {
                 tick()
             } catch (t: Throwable) {
                 XposedApi.log("tick: $t")
+                Trace.note("崩", "这一轮抛异常了：${t.javaClass.simpleName} ${t.message.orEmpty().take(80)}")
+            } finally {
+                // 放在 finally：tick 里那些 return 全都要走到这儿，
+                // 否则「刚好卡住的那一轮」恰好不回传，最该看的时候没得看。
+                maybeSendTrace()
             }
             handler.postDelayed(this, if (onChat) 900L else 2600L)
         }
+    }
+
+    /**
+     * 自动回传决策轨迹。
+     *
+     * 为什么自动发：轨迹的价值全在「刚复现完那一刻」—— 用户不会记得切回 App 点按钮。
+     * 为什么不能每轮发：tick 900ms 一轮，如实回传会把广播通道淹掉，也一直把 App 进程唤醒。
+     * 所以拿 [Trace.version]（只有**新增**条目才会变）当水位：有新内容、且距上次 ≥20 秒才发一次。
+     * 连续重复的记录只合并计数、不算新内容，所以正常聊天时它几乎不发。
+     */
+    private fun maybeSendTrace() {
+        val now = System.currentTimeMillis()
+        val ver = Trace.version()
+        // 没记新东西：跳过（合并计数不算，否则那行一直在长的「跳过」会每 20 秒顶一次水位）
+        if (ver == lastTraceVer) return
+        // 有变化但还不到间隔：水位不推，等下一次 tick 到点了自然会发
+        if (now - lastTraceAt < Trace.SEND_MIN_MS) return
+        lastTraceVer = ver
+        lastTraceAt = now
+        runCatching { Heartbeat.send(a, 0, trace = Trace.dump(now)) }
     }
 
     fun onResume() {
@@ -285,7 +313,10 @@ internal class Panel(private val a: Activity) {
     // ---------------- 主循环 ----------------
 
     private fun tick() {
-        val decor = a.window?.decorView ?: return
+        val decor = a.window?.decorView ?: run {
+            Trace.note("窗口", "拿不到 decorView（页面还没建好，或正在销毁）")
+            return
+        }
         (decor as? ViewGroup)?.let { ensureAttached(it) }
 
         // 配置文件变了就地重读。提到最前面：下面几个早退分支都依赖它，尤其是「手动抓取」。
@@ -298,6 +329,7 @@ internal class Panel(private val a: Activity) {
         val req = prefs?.getLong(Keys.DIAG_REQ, 0L) ?: 0L
         if (req > lastDiagReq) {
             lastDiagReq = req
+            Trace.note("抓取", "App 点了「抓当前微信界面」→ 手动 dump 结构（连带这份轨迹一起回传）")
             val in0 = reader.findChatInput(decor)
             val ls0 = in0?.let { reader.findList(decor, it) }
             dumpDiagnosis(
@@ -314,7 +346,10 @@ internal class Panel(private val a: Activity) {
         // 而后面的早退分支一个比一个苛刻 —— 挡在哪儿都会让请求石沉大海，用户那边只看到「没反应」。
         maybePullConversations(decor)
 
-        if (!decor.hasWindowFocus()) return
+        if (!decor.hasWindowFocus()) {
+            Trace.note("焦点", "窗口没焦点（微信不在前台，或被别的窗口盖着）")
+            return
+        }
 
         val cachedInput = inputRef
         val input = if (cachedInput != null && cachedInput.isShown) {
@@ -325,7 +360,16 @@ internal class Panel(private val a: Activity) {
         if (input == null) {
             // 以前这里直接 hideAll() 就结束，于是「这几个聊天页为什么连卡片都不弹」永远查不出来。
             // 现在只要屏幕上还有「像输入框」的控件，就把结构 dump 回去（30s 限流）。
-            reader.findInputCandidate(decor)?.let { cand ->
+            val cand0 = reader.findInputCandidate(decor)
+            Trace.note(
+                "输入",
+                if (cand0 == null) {
+                    "整屏没有像输入框的控件（这一页多半不是聊天页）"
+                } else {
+                    "有候选但判定不可用：${cand0.javaClass.name} ${cand0.width}x${cand0.height} isShown=${cand0.isShown}"
+                },
+            )
+            cand0?.let { cand ->
                 dumpDiagnosis(
                     decor, null, cand,
                     "像聊天页但找不到可用输入框：候选=${cand.javaClass.name} " +
@@ -337,9 +381,13 @@ internal class Panel(private val a: Activity) {
             return
         }
         onChat = true
-        if (!reloadConfig()) return
+        if (!reloadConfig()) {
+            Trace.note("配置", "读不到配置（prefs 为空）：模块没启用，或没勾选微信")
+            return
+        }
         val cfg = config ?: return
         if (!cfg.enabled) {
+            Trace.note("开关", "总开关关着（设置 → 微信内自动分析）→ 这一页什么都不做")
             hideAll()
             return
         }
@@ -357,6 +405,14 @@ internal class Panel(private val a: Activity) {
         if (list == null) {
             // 布局刚切换时会短暂读不到，连续两次才算真的找不到
             noListTicks++
+            Trace.note(
+                "列表",
+                if (noListTicks < 2) {
+                    "第 $noListTicks 轮没读到消息列表（刚切换布局，先等等）"
+                } else {
+                    "连续 $noListTicks 轮找不到消息列表（微信可能换了控件类型）"
+                },
+            )
             if (noListTicks >= 2) {
                 dumpDiagnosis(decor, null, input, "找到了输入框，但没找到消息列表")
                 if (force || noListTicks == 2) {
@@ -375,7 +431,11 @@ internal class Panel(private val a: Activity) {
         val fingerprint = reader.fingerprint(list)
         // 识图是在后台认的：认完的时候这一屏一个字都没变，但可用的内容变了 ——
         // 所以「刚认完」也要放行一次（takeDirty 取一次就清）。
-        if (!force && !ocr.takeDirty() && fingerprint == lastFingerprint) return
+        if (!force && !ocr.takeDirty() && fingerprint == lastFingerprint) {
+            // 正常聊天时绝大多数轮都走这儿 —— 靠「连续相同合并计数」才没把缓冲刷满
+            Trace.note("跳过", "这一屏和上一轮一模一样，不重复读")
+            return
+        }
         force = false
         lastFingerprint = fingerprint
 
@@ -388,11 +448,20 @@ internal class Panel(private val a: Activity) {
         // 仍然被下面那道闸拦着。要更严（白名单外的会话连图都不认）也行，但那需要把会话名
         // 提前读出来，而会话名本来就依赖解析结果 —— 环形依赖，先记在这里。
         if (ocr.prepare(rows, cfg)) {
+            Trace.note("识图", "还有图片在后台认字，这一轮先不分析（免得拿占位先问一遍）")
             setChip("正在认图…")
             return
         }
         // 到这儿每张图都已经有确定结果了（认到的文字 / 确实没字 / 失败冷却），解析只是个纯查询
         val msgs = parser.parse(rows) { img -> ocr.textOf(img) }.takeLast(cfg.ctx)
+        // 只记**条数和方向**，不记正文：轨迹会顺着心跳回传、常驻 App 本地，
+        // 不该比诊断包更容易泄露聊天内容。一条都没解析出来时这一条不记 —— 紧接着的「空」会说清楚。
+        if (msgs.isNotEmpty()) {
+            Trace.note(
+                "读到",
+                "解析出 ${msgs.size} 条，最后一条" + if (msgs.last().fromMe) "是我发的" else "是对方发的",
+            )
+        }
         // 识图状态变了就回传一句给设置页（没变不发，别把广播通道淹了）
         ocr.takeLine()?.let { Heartbeat.send(a, 0, ocr = it) }
 
@@ -402,6 +471,7 @@ internal class Panel(private val a: Activity) {
         // 等于最需要它的时候恰好不执行：读不到 → 立刻 return → 永远读不到。
         val fresh = TextCapture.takeLearned()
         if (fresh.isNotEmpty()) {
+            Trace.note("自愈", "学到 ${fresh.size} 个正文控件类 → 请求列表重绑一次，好让 setText 钩子抓到原文")
             fresh.forEach { Heartbeat.send(a, 0, learned = it) }
             nudgeRebind(list)
         }
@@ -411,6 +481,7 @@ internal class Panel(private val a: Activity) {
             // 现在第一次把话说清楚，并留下诊断。
             if (!emptyNotified) {
                 emptyNotified = true
+                Trace.note("空", "选到了消息列表，但一条文字都没解析出来（正文可能是自绘控件）")
                 dumpDiagnosis(decor, list, input, "选到了消息列表，但一行文字都没解析出来（指纹=${fingerprint.take(60)}）")
                 showMessage(
                     "这个聊天读不到文字（正文可能是自绘控件）。\n" +
@@ -431,6 +502,14 @@ internal class Panel(private val a: Activity) {
         // 只有跑完它，这一屏的 chatName 才是刚认出来的（不然第一帧用的还是上一个聊天的名字）。
         // recordToRoles 里面也有一道同样的闸，那道负责「连记录都不做」。
         if (blockedByWhitelist(cfg)) {
+            Trace.note(
+                "白名单",
+                if (chatName.isBlank()) {
+                    "白名单开着，但这个会话的名字没认出来 → 拦下（宁可不读，也不猜）"
+                } else {
+                    "会话「$chatName」不在白名单里 → 不分析"
+                },
+            )
             setChip(if (chatName.isBlank()) "白名单 · 认不出会话名" else "白名单外 · 未启用")
             // 认不出名字这种情况最容易让人以为「白名单坏了」—— 第一次把话说清楚，
             // 之后只留按钮上的字（诊断在 recordToRoles 里已经写过，含标题候选）。
@@ -451,6 +530,7 @@ internal class Panel(private val a: Activity) {
         // 安全网：一条文字都没读到，说明「读的东西」本身就不对。
         // 这时候去调模型只会浪费 token 并给出荒谬建议，所以先停下、留诊断、明确告诉用户。
         if (msgs.size >= 2 && msgs.all { it.attachment }) {
+            Trace.note("全图", "读到 ${msgs.size} 条全是图片/表情占位，一条文字都没有 → 多半选错列表了")
             dumpDiagnosis(decor, list, input, "读到 ${msgs.size} 条消息，但全部是图片/表情占位，一条文字都没有")
             showMessage(
                 "读到的全是图片占位、一条文字都没有 —— 多半是消息列表选错了。\n" +
@@ -461,12 +541,17 @@ internal class Panel(private val a: Activity) {
         }
         // 最后一条是我发的：没什么可回的，收起卡片（按钮留在场上，点一下就是重新识别）
         if (msgs.last().fromMe) {
+            Trace.note("方向", "最后一条是我发的 → 没什么可回，收起卡片")
             showIdle()
             return
         }
-        if (busy) return
+        if (busy) {
+            Trace.note("忙", "上一轮还在跑（模型还没回），这一轮不重复问")
+            return
+        }
 
         cache[fingerprint]?.let {
+            Trace.note("缓存", "这一屏之前问过，直接用缓存（不烧 token）")
             render(it, msgs, fromCache = true)
             return
         }
@@ -474,11 +559,13 @@ internal class Panel(private val a: Activity) {
         val joined = msgs.joinToString("\n") { it.text }
         val hits = if (cfg.allowSensitive || fingerprint == skipSensitiveFor) emptyList() else Sensitive.hits(joined)
         if (hits.isNotEmpty()) {
+            Trace.note("敏感", "命中敏感词：${hits.joinToString("、")} → 只提示，不外发")
             renderSensitive(hits)
             return
         }
 
         if (System.currentTimeMillis() - lastCallAt < cfg.minIntervalSec * 1000L) {
+            Trace.note("间隔", "距上次调用不到 ${cfg.minIntervalSec}s（设置里可调小）→ 只在按钮上留倒计时")
             // 不弹卡片打断聊天，只在按钮上留个倒计时（「设置」里可以把这个间隔调小）
             val left = (cfg.minIntervalSec * 1000L - (System.currentTimeMillis() - lastCallAt) + 999L) / 1000L
             setChip("$left s 后可再识别")
@@ -553,17 +640,25 @@ internal class Panel(private val a: Activity) {
         }
         // 聊天页读到的是消息正文，不是会话名。这一屏跳过，**请求留着**（不消费），
         // 等切到列表页再读 —— 消费掉的话，用户切过去就什么都不会发生了。
-        if (onChatPage) return
+        if (onChatPage) {
+            if (fresh) Trace.note("会话", "App 要拉会话列表，但当前在聊天页（读到的是消息正文）→ 跳过，等切到列表页")
+            return
+        }
         lastConvPullAt = now
         if (fresh) lastConvReq = req
         try {
             val (names, info) = reader.conversationNames(decor)
             val tagged = "页面=${a.javaClass.simpleName}｜$info"
+            val joined = names.joinToString("\n")
+            // 只在「App 明确要」或「名字真的变了」时留痕：白名单开着时会 15 秒自动扫一次，
+            // 每次都记的话，轨迹会被这一行刷满、把真正的判定挤出去。
+            if (fresh || (names.isNotEmpty() && joined != lastConvNames)) {
+                Trace.note("会话", "读到 ${names.size} 个会话名｜$tagged")
+            }
             if (fresh) {
-                Heartbeat.send(a, 0, chats = names.joinToString("\n"), chatsInfo = tagged)
+                Heartbeat.send(a, 0, chats = joined, chatsInfo = tagged)
                 return
             }
-            val joined = names.joinToString("\n")
             // 名字没变就不重复发（用户滚动列表时才会变）
             if (names.isNotEmpty() && joined != lastConvNames) {
                 lastConvNames = joined
@@ -829,6 +924,16 @@ internal class Panel(private val a: Activity) {
     private fun ask(cfg: ConfigData, msgs: List<ChatMsg>, fingerprint: String, roleContext: String?) {
         busy = true
         lastCallAt = System.currentTimeMillis()
+        // 只记「几条 · 哪个会话 · 走哪条路」，**不记正文**
+        Trace.note(
+            "调用",
+            "发起分析：${msgs.size} 条 · 会话「${chatName.ifBlank { "?" }}」 · 路线=" +
+                (if (ProxyProtocol.routeOf(cfg.proxyEnabled, cfg.proxyToken) == ProxyProtocol.ROUTE_PROXY) {
+                    "本地代理"
+                } else {
+                    "直连"
+                }),
+        )
         val gen = ++generation
         showThinking()
         Thread {
@@ -882,6 +987,15 @@ internal class Panel(private val a: Activity) {
             handler.post {
                 if (gen != generation) return@post
                 busy = false
+                Trace.note(
+                    "结果",
+                    when {
+                        ok != null -> "模型回来了：风险=${ok.risk} · 候选 ${ok.replies.size} 条" +
+                            (if (ok.warnings.isEmpty()) "" else " · 告警：${ok.warnings.joinToString("；")}")
+                        err is LlmException -> "失败：${err.message}"
+                        else -> "失败：${err?.message ?: "未知错误"}"
+                    },
+                )
                 when {
                     ok != null -> {
                         cache[fingerprint] = ok

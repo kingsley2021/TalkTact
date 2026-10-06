@@ -60,9 +60,15 @@ class LlmClient(
     private fun viaProxy(): Boolean =
         ProxyProtocol.routeOf(cfg.proxyEnabled, cfg.proxyToken) == ProxyProtocol.ROUTE_PROXY
 
-    /** 出站凭据：代理模式给 token（App 会用真 Key 去调服务商），否则就是 API Key 本身。 */
-    private fun authHeader(): String =
-        "Bearer " + if (viaProxy()) cfg.proxyToken else cfg.apiKey
+    /**
+     * 出站凭据：代理模式给 token（App 会用真 Key 去调服务商），否则就是 API Key 本身。
+     *
+     * 参数由调用方从「这一跳到底走不走代理」算出来，**不再自己调 [viaProxy]** ——
+     * 两者必须同一个判断。原来这里自己算，而 `probe()` 的地址是直连的（刻意如此，见 probe），
+     * 于是自检就出现了「连服务商、发代理 token」的组合 → 必然 401，回显的还正是那个随机 token。
+     */
+    private fun authHeader(proxyRoute: Boolean): String =
+        "Bearer " + if (proxyRoute) cfg.proxyToken else cfg.apiKey
 
     /** 发起前的前置检查。代理模式下**不看 Key** —— 它本来就该是空的（App 根本没推过来）。 */
     private fun requireReady() {
@@ -235,6 +241,8 @@ class LlmClient(
      * 那是模型听不听话的问题，不是连接的问题。想验模型是否按契约回复，去「试一试」页。
      */
     fun probe(): ProbeResult {
+        // 自检永远是直连的（地址见下），所以这里要的就是**真 Key** ——
+        // 代理模式下 `proxyToken` 不是凭据，拿它去连服务商只会换回一个 401。
         if (cfg.apiKey.isBlank()) throw LlmException("还没填 API Key", "到「设置 → 高级设置」里填地址和 Key")
         val url = endpoint(cfg.baseUrl)
         val host = NetInfo.hostOf(url)
@@ -258,7 +266,9 @@ class LlmClient(
             ),
         )
         val start = System.currentTimeMillis()
-        val root = parseResponse(post(url, payload))
+        // direct = true：自检量的是**真实目标机**的 DNS/TCP 延迟，走回环就变成量 127.0.0.1，没意义。
+        // 「代理通不通」由代理卡片那行「微信侧最近一次走的是：本地代理 ✅」负责。
+        val root = parseResponse(post(url, payload, direct = true))
         return ProbeResult(
             host = host,
             targetIp = targetIp,
@@ -282,12 +292,16 @@ class LlmClient(
         return chatCompletionsUrl(base)
     }
 
-    /** 失败重试一次（只对超时/5xx/429 这种「可能只是碰巧」的错误）。 */
-    private fun post(url: String, payload: String): String {
+    /**
+     * 失败重试一次（只对超时/5xx/429 这种「可能只是碰巧」的错误）。
+     *
+     * @param direct 这一跳**强制直连**、不走本地代理（自检用）。
+     */
+    private fun post(url: String, payload: String, direct: Boolean = false): String {
         var last: LlmException? = null
         for (attempt in 0..1) {
             try {
-                return once(url, payload)
+                return once(url, payload, direct)
             } catch (e: LlmException) {
                 last = e
                 if (!e.retryable || attempt == 1) break
@@ -302,7 +316,7 @@ class LlmClient(
         throw last ?: LlmException("请求失败", null)
     }
 
-    private fun once(url: String, payload: String): String {
+    private fun once(url: String, payload: String, direct: Boolean = false): String {
         val conn = try {
             URL(url).openConnection() as HttpURLConnection
         } catch (t: Throwable) {
@@ -315,9 +329,11 @@ class LlmClient(
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             conn.setRequestProperty("Accept", "application/json")
-            conn.setRequestProperty("Authorization", authHeader())
+            // 「走不走代理」在这里只算一次，凭据和接口头都用它 —— 两者分开判断过一次，出了 401
+            val proxyRoute = !direct && viaProxy()
+            conn.setRequestProperty("Authorization", authHeader(proxyRoute))
             // 代理那侧认不出「这一跳是谁」，得靠这个头告诉它用哪套接口（只对代理有意义）
-            if (viaProxy()) {
+            if (proxyRoute) {
                 conn.setRequestProperty(ProxyProtocol.HEADER_ENDPOINT, ProxyProtocol.endpointHeader(second))
             }
             conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }

@@ -2566,9 +2566,11 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
     val diagAt = remember(tick) { store.diagAt() }
     val lastCall = remember(tick) { store.lastCall() }
     val lastCallAt = remember(tick) { store.lastCallAt() }
+    val trace = remember(tick) { store.trace() }
+    val traceAt = remember(tick) { store.traceAt() }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
-        ScreenHeader("诊断", "抓界面 · 看调用 · 复制发我") {
+        ScreenHeader("诊断", "抓界面 · 看轨迹与调用 · 复制发我") {
             HeaderButton("↻ 刷新") { tick++ }
             Spacer(Modifier.width(8.dp))
             HeaderButton("← 返回", onBack)
@@ -2592,6 +2594,35 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
                 if (diagAsked) {
                     Text("已排队，切回微信那一页即抓", fontSize = 12.sp, color = palette.ok)
                 }
+            }
+        }
+
+        if (trace.isNotBlank()) {
+            GlassCard(glassAlpha, border = palette.ok.copy(alpha = 0.45f)) {
+                Text("决策轨迹（每一轮读到什么、停在哪一步）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text(
+                    "更新于 ${formatTime(traceAt)} · 卡片不弹时先看它：注入侧每一轮都留一条，" +
+                        "扫一眼就知道是卡在「找不到输入框」还是「最后一条是我发的」。它刻意不含聊天正文。",
+                    fontSize = 12.sp,
+                    color = palette.sub,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(trace, fontSize = 10.sp, color = palette.text)
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { clipboard.setText(AnnotatedString(trace)) },
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text("复制轨迹") }
+            }
+        } else {
+            GlassCard(glassAlpha) {
+                Text("还没有轨迹", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text(
+                    "在微信里打开一个聊天页停一会儿，注入侧就会把判定记下来并自动回传；" +
+                        "也可以点上面那个「抓当前微信界面」立刻带一份回来。",
+                    fontSize = 12.sp,
+                    color = palette.sub,
+                )
             }
         }
 
@@ -3296,6 +3327,9 @@ private fun buildDiagZip(context: Context, store: ConfigStore, cfg: ConfigData):
             "04-诊断.txt" to store.diag().ifBlank { "（还没有诊断数据：到「诊断」页点一次「抓取微信界面」）" },
             "05-最近一次调用.txt" to store.lastCall().ifBlank { "（还没有调用记录）" },
             "06-用量.txt" to "调用次数：$calls\n累计 token：$tokens\n",
+            "07-决策轨迹.txt" to store.trace().ifBlank {
+                "（还没有轨迹：在微信里打开一个聊天页停一会儿，轨迹会自动回传）"
+            },
         ),
     )
 }

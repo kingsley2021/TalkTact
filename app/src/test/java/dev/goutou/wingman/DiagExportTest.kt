@@ -45,6 +45,10 @@ class DiagExportTest {
         assertTrue(readme.contains("聊天内容"))
         assertTrue(readme.contains("不含 API Key"))
         assertTrue(readme.contains("v0.8.8(35)"))
+        // 决策轨迹也得列进去：它是排查「卡片不弹」时用户最先要看的一份，
+        // 说明里不提，对方根本不知道包里还有它。
+        assertTrue(readme.contains("07-决策轨迹"))
+        assertTrue(readme.contains("不含聊天内容"))
     }
 
     @Test

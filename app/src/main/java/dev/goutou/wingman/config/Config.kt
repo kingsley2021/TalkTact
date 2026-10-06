@@ -111,6 +111,14 @@ object Keys {
     /** 第二套接口（分级模式的「风险评估」那一路）的模型列表 */
     const val MODEL_LIST_2 = "model_list_2"
     const val MODEL_LIST_2_AT = "model_list_2_at"
+    /**
+     * 决策轨迹（注入侧的 ring buffer 渲染成文本）。
+     *
+     * 和 [DIAG] 的区别：DIAG 是**界面结构快照**（限流、体量大、含聊天正文），
+     * TRACE 是**判定时间线**（连续、小、不含正文）—— 排查「为什么没弹卡片」看它。
+     */
+    const val TRACE = "trace"
+    const val TRACE_AT = "trace_at"
 }
 
 /** 默认几点跑。 */
@@ -528,6 +536,14 @@ class ConfigStore(context: Context) {
     fun diag(): String = sp.getString(Keys.DIAG, "").orEmpty()
 
     fun diagAt(): Long = sp.getLong(Keys.DIAG_AT, 0L)
+
+    /**
+     * 微信进程回传的「决策轨迹」（比 diag 更连续、更小、不含聊天正文）。
+     * 排查「卡片为什么不弹」时先看它 —— 它把每一轮的判定和停在哪一步都记下来了。
+     */
+    fun trace(): String = sp.getString(Keys.TRACE, "").orEmpty()
+
+    fun traceAt(): Long = sp.getLong(Keys.TRACE_AT, 0L)
 
     /**
      * 注入侧回传的「最近一次真正发出去的请求」存档。
