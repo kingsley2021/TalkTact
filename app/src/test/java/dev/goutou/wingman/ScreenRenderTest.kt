@@ -102,6 +102,9 @@ class ScreenRenderTest {
         rule.onNodeWithText("模型分级").assertExists()
         // 白名单卡顶部那张白底说明 / 注意事项卡也在
         rule.onNodeWithText("怎么用").assertExists()
+        // 图片文字识别（OCR）：开关 + 「最近一次」状态行
+        rule.onNodeWithText("图片文字识别（OCR）").assertExists()
+        rule.onNodeWithText("识别聊天里的图片").assertExists()
         rule.onNodeWithText("会话白名单").assertExists()
         capture("advanced")
     }

@@ -70,6 +70,8 @@ internal class Panel(private val a: Activity) {
 
     private val reader = ViewReader(a)
     private val parser = ChatParser(a.resources.displayMetrics.widthPixels)
+    /** 图片文字识别：把行里的图送去 App 认字（同一张图只发一次，认不出来回落成占位）。 */
+    private val ocr = ImageOcr()
     private val handler = Handler(Looper.getMainLooper())
     /**
      * 配置。注入进程里**只读**：App 侧写本地 SharedPreferences，框架把改动实时推到这里。
@@ -371,11 +373,28 @@ internal class Panel(private val a: Activity) {
         noListTicks = 0
 
         val fingerprint = reader.fingerprint(list)
-        if (!force && fingerprint == lastFingerprint) return
+        // 识图是在后台认的：认完的时候这一屏一个字都没变，但可用的内容变了 ——
+        // 所以「刚认完」也要放行一次（takeDirty 取一次就清）。
+        if (!force && !ocr.takeDirty() && fingerprint == lastFingerprint) return
         force = false
         lastFingerprint = fingerprint
 
-        val msgs = parser.parse(reader.snapshot(list)).takeLast(cfg.ctx)
+        val rows = reader.snapshot(list)
+        // 图片先排进后台去认（这一步不阻塞）。还有图没认完就这一轮先不分析 ——
+        // 免得先拿 [图片] 占位问一遍、认完再问一遍（既费 token，两次结果还不一样）。
+        //
+        // 和白名单的关系：这一步在白名单那道闸**之前**，和「读消息」是同一边的东西 ——
+        // 图片只在本机两个进程之间走一趟（不外发、不落盘），而真正会把内容送出去的**分析**
+        // 仍然被下面那道闸拦着。要更严（白名单外的会话连图都不认）也行，但那需要把会话名
+        // 提前读出来，而会话名本来就依赖解析结果 —— 环形依赖，先记在这里。
+        if (ocr.prepare(rows, cfg)) {
+            setChip("正在认图…")
+            return
+        }
+        // 到这儿每张图都已经有确定结果了（认到的文字 / 确实没字 / 失败冷却），解析只是个纯查询
+        val msgs = parser.parse(rows) { img -> ocr.textOf(img) }.takeLast(cfg.ctx)
+        // 识图状态变了就回传一句给设置页（没变不发，别把广播通道淹了）
+        ocr.takeLine()?.let { Heartbeat.send(a, 0, ocr = it) }
 
         // 自愈必须排在「一条都没读到」的判断**之前**。
         // 正文控件是「看到才挂钩子」的，而文字早在挂钩之前就设好了 —— 只有让微信重绑一次，

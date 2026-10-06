@@ -11,7 +11,12 @@ class ChatParser(
     private val maxTextLen: Int = 400,
 ) {
 
-    fun parse(rows: List<RowSnapshot>): List<ChatMsg> {
+    /**
+     * @param imageText 这一行的图认出来什么字（图片消息才问）。默认为「认不出来」——
+     *   注入侧传的是「走本地代理去 App 认字」，单测传的是现成的字符串。
+     *   **它抛异常也不会影响解析**：这一行走兜底（回落成 [ATTACHMENT_TEXT]）。
+     */
+    fun parse(rows: List<RowSnapshot>, imageText: (RowImage) -> String? = { null }): List<ChatMsg> {
         val out = ArrayList<ChatMsg>(rows.size)
         for (row in rows) {
             val bubble = row.bubble ?: continue
@@ -22,7 +27,12 @@ class ChatParser(
 
             val raw = bubble.text
             if (raw == null) {
-                add(out, ChatMsg(fromMe, ATTACHMENT_TEXT, who, attachment = true))
+                // 图片消息：问一句「这张图认出来什么字」。认字这件事本身在 App 进程里做，
+                // 这里拿到的可能是什么都没有 —— 那就还是老占位，行为和没这个功能时一模一样。
+                val ocr = row.image?.let { runCatching { imageText(it) }.getOrNull() }
+                val text = imageMessageText(ocr, maxTextLen)
+                // 认到字的当**真消息**（进上下文、也进角色记录）；没认到的仍是「内容未知」的占位
+                add(out, ChatMsg(fromMe, text, who, attachment = text == ATTACHMENT_TEXT))
                 continue
             }
             val text = clean(raw)

@@ -517,7 +517,76 @@ internal class ViewReader(private val a: Activity) {
             }
         }
 
-        return RowSnapshot(bubble, texts, avatars)
+        // 只有「这一行没有正文」时才去找图：有文字的行不用管图。
+        // 找不到就照旧 null —— 没有这一步时是什么样，现在还是什么样。
+        val image = if (bubble?.text == null) {
+            messageImage(row)?.let { hit -> RowImage(hit.w, hit.h) { side -> jpegOf(hit.view, side) } }
+        } else {
+            null
+        }
+
+        return RowSnapshot(bubble, texts, avatars, image)
+    }
+
+    /** 找到的「消息图」：控件本体 + 它在屏幕上的尺寸（尺寸只用来写诊断）。 */
+    private class ImgTarget(val view: ImageView, val w: Int, val h: Int)
+
+    /**
+     * 一行里那张「消息图」。
+     *
+     * 判据：**最大**的那个 ImageView，且短边 > 84dp。
+     * 为什么用尺寸而不是类名：微信的图片控件类名跨版本会变，而「比表情/头像大得多」这件事很稳定 ——
+     * 头像（24~84dp 的方形）已经在 [readRow] 里被排除了，表情 / 贴纸也都是方方正正的小图，
+     * 真正的照片和聊天截图都远大于这个尺寸。
+     *
+     * 认错了也不要紧：认不出字就回落成 `[图片]` 占位（见 [imageMessageText]），
+     * 顶多多花一次识别时间，不会让分析出错。
+     */
+    private fun messageImage(row: View): ImgTarget? {
+        var best: ImgTarget? = null
+        walk(row, includeInvisible = false) { v ->
+            if (v !is ImageView) return@walk
+            val w = if (v.width > 0) v.width else v.measuredWidth
+            val h = if (v.height > 0) v.height else v.measuredHeight
+            if (w <= 0 || h <= 0) return@walk
+            if (minOf(w, h) <= dp(84)) return@walk                    // 头像 / 表情 / 角标，不是消息图
+            val cur = best
+            if (cur != null && w * h <= cur.w * cur.h) return@walk     // 已经有更大的了
+            val bmp = (v.drawable as? BitmapDrawable)?.bitmap ?: return@walk
+            if (bmp.isRecycled) return@walk
+            best = ImgTarget(v, w, h)
+        }
+        return best
+    }
+
+    /**
+     * 把消息图压成可以走回环的 JPEG。
+     *
+     * 先等比缩到最长边 [maxSide]，再按 q82 编码 —— 一张聊天截图通常能压到几百 KB，
+     * 而识别精度几乎不受影响（ML Kit 自己也会再缩一次）。
+     * **绝不回收原图**（那张位图是微信的，我们只是读一下），只回收自己缩出来的那份。
+     */
+    private fun jpegOf(iv: ImageView, maxSide: Int): ByteArray? {
+        val src = (iv.drawable as? BitmapDrawable)?.bitmap ?: return null
+        if (src.isRecycled || src.width <= 0 || src.height <= 0) return null
+        val longest = maxOf(src.width, src.height)
+        val scaled = if (maxSide > 0 && longest > maxSide) {
+            val k = maxSide.toFloat() / longest
+            runCatching {
+                Bitmap.createScaledBitmap(
+                    src,
+                    (src.width * k).toInt().coerceAtLeast(1),
+                    (src.height * k).toInt().coerceAtLeast(1),
+                    true,
+                )
+            }.getOrNull() ?: return null
+        } else {
+            src
+        }
+        val out = java.io.ByteArrayOutputStream()
+        val ok = runCatching { scaled.compress(Bitmap.CompressFormat.JPEG, 82, out) }.getOrDefault(false)
+        if (scaled !== src) runCatching { scaled.recycle() }
+        return if (ok) out.toByteArray() else null
     }
 
     /**

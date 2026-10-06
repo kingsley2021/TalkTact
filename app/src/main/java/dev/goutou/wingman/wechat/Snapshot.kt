@@ -1,5 +1,7 @@
 package dev.goutou.wingman.wechat
 
+import dev.goutou.wingman.proxy.ProxyProtocol
+
 /**
  * View 树 -> 纯数据的中间表示。
  *
@@ -43,7 +45,30 @@ data class RowSnapshot(
     val bubble: Bubble?,
     val texts: List<TextNode> = emptyList(),
     val avatars: List<AvatarNode> = emptyList(),
+    /**
+     * 这一行里那张「消息图」（没有图就是 null）。
+     *
+     * 只带尺寸和一个**按需取字节**的入口：抓图 + 重新编码是有成本的，不该每轮读屏都做一遍；
+     * 而取字节要碰 Android API，所以做成回调 —— 快照这一层仍然是纯数据，单测照样能造。
+     */
+    val image: RowImage? = null,
 )
+
+/**
+ * 一行里的那张图（图片消息用）。
+ *
+ * @param width/height 图在屏幕上的尺寸（诊断里用它说明「取的是哪一张」）
+ * @param grab 按「最长边」取 JPEG 字节；null = 这张图不打算送（取不到位图 / 编码失败）
+ */
+class RowImage(
+    val width: Int,
+    val height: Int,
+    private val grab: (Int) -> ByteArray?,
+) {
+    /** 压成 JPEG。默认最长边走 [ProxyProtocol.OCR_MAX_SIDE]。 */
+    fun jpeg(maxSide: Int = ProxyProtocol.OCR_MAX_SIDE): ByteArray? =
+        runCatching { grab(maxSide) }.getOrNull()
+}
 
 /** 交给模型的一条消息。 */
 data class ChatMsg(
@@ -55,3 +80,22 @@ data class ChatMsg(
 )
 
 const val ATTACHMENT_TEXT = "[图片/表情/语音]"
+
+/** 认出来的图片文字写进上下文时的前缀（模型靠它知道「这是从图里认出来的，可能有错字」）。 */
+const val IMAGE_PREFIX = "[图片] "
+
+/**
+ * 图片那一行最终写进上下文的样子。
+ *
+ * 认出字 → `[图片] 认出来的文字`（告诉模型这是从图里认出来的，可能有错别字 ——
+ * 但总比「内容未知，不要猜」强）；没认出来 / 没开识图 / 认字失败 → 退回老占位 [ATTACHMENT_TEXT]。
+ *
+ * 截断而不是丢弃：普通文字消息超过 [ChatParser] 的上限会被整条丢掉，
+ * 但一张图的文字往往只是一部分有用 —— 留前面这些字比什么都不留强。
+ */
+fun imageMessageText(ocr: String?, max: Int = 400): String {
+    val t = ocr?.trim().orEmpty()
+    if (t.isEmpty()) return ATTACHMENT_TEXT
+    val body = if (max > 0 && t.length > max) t.take(max) + "…" else t
+    return IMAGE_PREFIX + body
+}

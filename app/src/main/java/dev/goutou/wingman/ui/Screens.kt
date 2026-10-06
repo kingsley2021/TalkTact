@@ -1163,6 +1163,18 @@ fun AdvancedScreen(
         onSaved()
     }
 
+    /**
+     * 「图片文字识别」开关也**立刻落盘** —— 和它上面那张「本地代理」卡连着用：
+     * 代理开着、识图关着，效果是白装十几 MB；两个开关的行为一致，才不会让人以为坏了。
+     */
+    fun saveOcr(on: Boolean) {
+        store.saveOcr(on)
+        val fresh = store.load()
+        d = d.copy(ocrEnabled = fresh.ocrEnabled)
+        persisted = fresh
+        onSaved()
+    }
+
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
             backupNote = try {
@@ -1199,15 +1211,20 @@ fun AdvancedScreen(
 
     var diagNote by remember { mutableStateOf<String?>(null) }
     var proxyNote by remember { mutableStateOf<String?>(null) }
+    var ocrNote by remember { mutableStateOf<String?>(null) }
     var whitelistNote by remember { mutableStateOf<String?>(null) }
     // 会话名候选是注入侧用广播回传的，这一页不会自己重组 —— 停在这里时每 1.5 秒自己看一眼。
     // （去微信转一圈再回来，看到的就是刚回传的那份。）
-    val pulled by produceState(initialValue = store.chatCandidates() to store.chatPullInfo()) {
+    // 这里的第三项是「图片识别」的最近一次结果 —— 它同样是注入侧广播回传的，
+    // 借同一次轮询一起读，省掉第二个定时器。
+    val pulled by produceState(
+        initialValue = Triple(store.chatCandidates(), store.chatPullInfo(), store.ocrInfo()),
+    ) {
         // 轮询**有上限**（约 5 分钟）：一个是别让这个页面永远挂着定时任务，
         // 另一个是单元测试里跑渲染回归时，无限循环的协程可能把测试挂住 —— 有界就没有这种风险。
         repeat(200) {
             kotlinx.coroutines.delay(1500)
-            value = store.chatCandidates() to store.chatPullInfo()
+            value = Triple(store.chatCandidates(), store.chatPullInfo(), store.ocrInfo())
         }
     }
     val cands = pulled.first
@@ -1220,6 +1237,10 @@ fun AdvancedScreen(
             reqAt > 0L -> "已请求 ${clockText(reqAt)} · 微信侧还没回过话"
             else -> "还没拉过"
         }
+    }
+    val ocrStatus = pulled.third.let { (info, at) ->
+        val head = info.ifBlank { "还没试过（微信里遇到图片消息才会有记录）" }
+        if (at > 0L) "$head · ${clockText(at)}" else head
     }
     var newChat by remember { mutableStateOf("") }
     // 白名单的「长按多选」状态。
@@ -1481,6 +1502,55 @@ fun AdvancedScreen(
             proxyNote?.let {
                 Spacer(Modifier.height(6.dp))
                 Text(it, fontSize = 12.sp, color = palette.sub)
+            }
+        }
+
+        GlassCard(d.glassAlpha) {
+            Text("图片文字识别（OCR）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text(
+                "聊天里的图片会先在这台手机上认成文字，再和别的消息一起交给模型 —— " +
+                    "截图、长图里的话也能被读懂。\n" +
+                    "认字完全离线：内置的中文模型，不联网、不下载、不需要 Play 服务，图片也不会上传" +
+                    "（只在本机两个进程之间走一趟）。代价是这个安装包大了十几 MB。",
+                fontSize = 11.sp,
+                color = palette.sub,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("识别聊天里的图片", fontSize = 15.sp, color = palette.text)
+                    Text(
+                        if (d.ocrEnabled) {
+                            "开着：每轮分析前，屏幕上的图会先认一遍字"
+                        } else {
+                            "关着：图片还是老样子 —— 用 [图片/表情/语音] 占位"
+                        },
+                        fontSize = 11.sp,
+                        color = palette.sub,
+                    )
+                }
+                Switch(
+                    checked = d.ocrEnabled,
+                    onCheckedChange = { on ->
+                        saveOcr(on)
+                        ocrNote = if (on) "已开 · 微信里下次识别生效" else "已关 · 图片回落成占位"
+                    },
+                )
+            }
+            if (d.ocrEnabled && !d.proxyEnabled) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "⚠ 还差一步：认字这件事在 App 进程里做，所以得先把上面那张卡的「本地代理」打开 —— " +
+                        "否则微信那边连不上本机端口，会直接跳过（图片仍是占位）。",
+                    fontSize = 11.sp,
+                    color = palette.warn,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("最近一次：$ocrStatus", fontSize = 11.sp, color = palette.sub)
+            ocrNote?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, fontSize = 11.sp, color = palette.ok)
             }
         }
 
@@ -2929,6 +2999,16 @@ private fun buildDiagZip(context: Context, store: ConfigStore, cfg: ConfigData):
                 append("\n参考条数：${cfg.ctx}　最短间隔：${cfg.minIntervalSec}s　temperature：${cfg.temperature}　max_tokens：${cfg.maxTokens}\n")
                 append("严格 JSON 输出：${cfg.jsonMode}　敏感内容检查：${!cfg.allowSensitive}\n")
                 append("当前 skill：${cfg.skillId}　提示词 ${cfg.prompt.length} 字　含 JSON 契约：${cfg.prompt.contains("replies")}\n")
+                // 识图排不进问题时最需要这两行：开关到底开没开、和「本地代理」有没有配套
+                val (ocrLine, ocrAt) = store.ocrInfo()
+                val ocrWhen = if (ocrAt > 0L) {
+                    " · " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
+                        .format(java.util.Date(ocrAt))
+                } else {
+                    ""
+                }
+                append("图片文字识别：${if (cfg.ocrEnabled) "开" else "关"}　本地代理：${if (cfg.proxyEnabled) "开" else "关"}\n")
+                append("最近一次识图：${ocrLine.ifBlank { "（还没有记录）" }}$ocrWhen\n")
                 append("API Key：已省略（不导出）\n")
             },
             "03-角色.txt" to buildString {

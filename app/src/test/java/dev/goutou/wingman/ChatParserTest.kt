@@ -5,6 +5,7 @@ import dev.goutou.wingman.wechat.AvatarNode
 import dev.goutou.wingman.wechat.Bubble
 import dev.goutou.wingman.wechat.ChatParser
 import dev.goutou.wingman.wechat.Kind
+import dev.goutou.wingman.wechat.RowImage
 import dev.goutou.wingman.wechat.RowSnapshot
 import dev.goutou.wingman.wechat.Side
 import dev.goutou.wingman.wechat.TextNode
@@ -24,6 +25,7 @@ class ChatParserTest {
         center: Double? = null,
         avatarOnRight: Boolean? = null,
         nickname: String? = null,
+        image: RowImage? = null,
     ): RowSnapshot {
         val avatars = when (avatarOnRight) {
             null -> emptyList()
@@ -33,8 +35,11 @@ class ChatParserTest {
         val texts = ArrayList<TextNode>()
         nickname?.let { texts.add(TextNode(it, top - 40, Kind.NICKNAME, 28f)) }
         text?.let { texts.add(TextNode(it, top, Kind.BUBBLE, 36f)) }
-        return RowSnapshot(Bubble(text, color, center, top), texts, avatars)
+        return RowSnapshot(Bubble(text, color, center, top), texts, avatars, image)
     }
+
+    /** 造一张「行里的图」：抓字节返回空数组就行 —— 单测里不会真的编码，更不会联网。 */
+    private fun img(): RowImage = RowImage(300, 400) { ByteArray(0) }
 
     @Test
     fun `单聊方向正确`() {
@@ -113,5 +118,56 @@ class ChatParserTest {
     fun `首尾空白和零宽字符被清掉`() {
         val msgs = parser.parse(listOf(row("  你好\u200b  ", 300, Side.OTHER, 0.35, false)))
         assertEquals("你好", msgs[0].text)
+    }
+
+    @Test
+    fun `图片消息认出字就当成真消息`() {
+        // 「[图片] 」这个前缀是给模型看的：这些字是从图里认出来的，可能有错别字
+        val msgs = parser.parse(listOf(row(null, 300, Side.OTHER, 0.35, false, image = img()))) { "今晚八点老地方" }
+        assertEquals(1, msgs.size)
+        assertEquals("[图片] 今晚八点老地方", msgs[0].text)
+        assertFalse(msgs[0].attachment)
+    }
+
+    @Test
+    fun `图片没认出字仍是老占位（行为不变）`() {
+        val msgs = parser.parse(listOf(row(null, 300, Side.OTHER, 0.35, false, image = img())))
+        assertEquals(ATTACHMENT_TEXT, msgs[0].text)
+        assertTrue(msgs[0].attachment)
+    }
+
+    @Test
+    fun `认得是空串也当没认出来`() {
+        val msgs = parser.parse(listOf(row(null, 300, Side.OTHER, 0.35, false, image = img()))) { "   " }
+        assertEquals(ATTACHMENT_TEXT, msgs[0].text)
+        assertTrue(msgs[0].attachment)
+    }
+
+    @Test
+    fun `认字炸了也不能影响这一行`() {
+        // 识图失败只是「这次没有文字可用」——绝不能把整轮分析带崩
+        val msgs = parser.parse(listOf(row(null, 300, Side.OTHER, 0.35, false, image = img()))) {
+            error("连不上代理")
+        }
+        assertEquals(ATTACHMENT_TEXT, msgs[0].text)
+        assertTrue(msgs[0].attachment)
+    }
+
+    @Test
+    fun `纯文字的消息不会去问识图`() {
+        var calls = 0
+        parser.parse(listOf(row("在吗", 300, Side.OTHER, 0.35, false))) { calls++; "x" }
+        assertEquals(0, calls)
+    }
+
+    @Test
+    fun `认出来的字太长是截断而不是丢掉`() {
+        // 普通文字消息超长会被整条丢掉；图里的字只知道一部分也比什么都没有强
+        val long = "字".repeat(600)
+        val msgs = parser.parse(listOf(row(null, 300, Side.OTHER, 0.35, false, image = img()))) { long }
+        assertEquals(1, msgs.size)
+        assertTrue(msgs[0].text.endsWith("…"))
+        assertEquals("[图片] ".length + 401, msgs[0].text.length)
+        assertFalse(msgs[0].attachment)
     }
 }

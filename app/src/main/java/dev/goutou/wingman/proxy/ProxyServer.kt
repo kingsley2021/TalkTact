@@ -3,6 +3,7 @@ package dev.goutou.wingman.proxy
 import android.content.Context
 import dev.goutou.wingman.config.ConfigStore
 import dev.goutou.wingman.llm.chatCompletionsUrl
+import dev.goutou.wingman.ocr.Ocr
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.InputStream
@@ -22,8 +23,10 @@ import java.util.concurrent.Executors
  *          ──(真实接口 + 真实 Key)──▶ 服务商 ──原样把响应写回──▶ 微信进程
  * ```
  *
- * 它只做「转发」这一件事：不解析 body、不落盘、**不记正文**（只记「成功/失败 + 耗时 + 状态码」），
- * 免得把聊天内容又抄一份到别处。
+ * 它只做两件事：**转发聊天请求**、**认图上的字**（`/proxy/ocr`，见 [Ocr]）。
+ *
+ * 聊天那条：不解析 body、不落盘、**不记正文**（只记「成功/失败 + 耗时 + 状态码」），免得把聊天内容又抄一份到别处。
+ * 图片那条：图只在这个进程的内存里走一趟，认完就丢 —— 不落盘、不上传，只把认出来的文字还给微信那边。
  *
  * 安全上的三条硬约束：
  * 1. **只绑回环地址** —— 同网段的其他设备连不上；
@@ -106,6 +109,36 @@ class ProxyServer(private val context: Context) {
                 return respond(output, 200, """{"ok":true,"port":${cfg.proxyPort}}""")
             }
 
+            // 图片文字识别：注入侧把聊天里的图压成 JPEG 发过来，本进程用 ML Kit 认出文字再还回去。
+            // 为什么不让微信那边自己认：ML Kit 是第三方库（模型 + 11MB 原生库），
+            // 注入侧只用系统 API 是硬规矩 —— 所以「图过来、文字回去」。
+            if (path == ProxyProtocol.PATH_OCR) {
+                if (method != "POST") return respond(output, 405, errorBody("只接受 POST"))
+                if (!ProxyProtocol.isAuthorized(headers["authorization"], cfg.proxyToken)) {
+                    ProxyState.lastResult = "拒绝：token 不对（识图）"
+                    return respond(output, 403, errorBody("token 不对"))
+                }
+                if (!cfg.ocrEnabled) return respond(output, 503, errorBody("App 里把「图片文字识别」关掉了"))
+                val size = headers["content-length"]?.toIntOrNull() ?: 0
+                if (size <= 0) return respond(output, 400, errorBody("没有图片内容"))
+                if (size > ProxyProtocol.OCR_MAX_BYTES) {
+                    return respond(output, 413, errorBody("图片太大（$size 字节）"))
+                }
+                val image = ByteArray(size).also { readFully(input, it) }
+                val started = System.currentTimeMillis()
+                return try {
+                    val text = Ocr.recognize(image)
+                    val cost = System.currentTimeMillis() - started
+                    ProxyState.lastResult =
+                        if (text.isEmpty()) "识图：这张图里没字 · ${cost}ms" else "识图 ${text.length} 字 · ${cost}ms"
+                    // 识别结果直接**当纯文本**还回去：注入侧不许引 JSON 库，让它读一行字最省事
+                    respond(output, 200, text, "text/plain; charset=utf-8")
+                } catch (t: Throwable) {
+                    ProxyState.lastResult = "识图失败：${t.message}"
+                    respond(output, 502, errorBody("识别失败：${t.message}"))
+                }
+            }
+
             if (path != ProxyProtocol.PATH_CHAT) return respond(output, 404, errorBody("未知路径：$path"))
             if (method != "POST") return respond(output, 405, errorBody("只接受 POST"))
             if (!ProxyProtocol.isAuthorized(headers["authorization"], cfg.proxyToken)) {
@@ -155,11 +188,16 @@ class ProxyServer(private val context: Context) {
 
     // ---------------- 小工具 ----------------
 
-    private fun respond(output: BufferedOutputStream, code: Int, body: String) {
+    private fun respond(
+        output: BufferedOutputStream,
+        code: Int,
+        body: String,
+        contentType: String = "application/json; charset=utf-8",
+    ) {
         val bytes = body.toByteArray(Charsets.UTF_8)
         val head = buildString {
             append("HTTP/1.1 ").append(code).append(' ').append(if (code in 200..299) "OK" else "Error").append("\r\n")
-            append("Content-Type: application/json; charset=utf-8\r\n")
+            append("Content-Type: ").append(contentType).append("\r\n")
             append("Content-Length: ").append(bytes.size).append("\r\n")
             append("Connection: close\r\n\r\n")
         }

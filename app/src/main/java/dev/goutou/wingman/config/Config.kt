@@ -91,6 +91,17 @@ object Keys {
     const val CHAT_AT = "chat_at"
     /** 白名单页里「删掉」的候选（归一化过）：记下来，下次拉取不再冒出来 */
     const val CHAT_IGNORED = "chat_ignored"
+    /**
+     * 图片文字识别（OCR）。
+     *
+     * 微信里读到一张图时，注入侧把图压成 JPEG 走本地代理送回来，App 用 ML Kit 当场认字，
+     * 认出来的文字就当那条消息的内容（见 wechat/ImageOcr.kt 与 proxy/ProxyServer.kt）。
+     * 默认开 —— 但它**先要本地代理开着**才有地方认（没代理时注入侧直接跳过、用老占位）。
+     */
+    const val OCR_ON = "ocr_on"
+    /** 注入侧回传：最近一次图片识别的结果（认出几个字 / 为什么没认），设置页显示它 */
+    const val OCR_INFO = "last_ocr"
+    const val OCR_AT = "last_ocr_at"
 }
 
 /** 默认几点跑。 */
@@ -184,6 +195,13 @@ data class ConfigData(
     val whitelistEnabled: Boolean = false,
     /** 白名单里的会话名（存的是 [Roles.normalizeKey] 归一化之后的样子）。 */
     val whitelist: Set<String> = emptySet(),
+    /**
+     * 图片文字识别（OCR）：把聊天里的图片认成文字再交给模型。
+     *
+     * 默认开。真正干活的在 App 进程（ML Kit），微信那边只负责把图送过去 ——
+     * 所以**必须先开「本地代理」**，否则注入侧连不上回环端口，会直接跳过（回落成 [ATTACHMENT_TEXT]）。
+     */
+    val ocrEnabled: Boolean = true,
 ) {
     /**
      * 分级模式下「风险评估」那一路要用的接口。
@@ -251,6 +269,7 @@ data class ConfigData(
                 .map { Roles.normalizeKey(it) }
                 .filter { it.isNotBlank() }
                 .toSet(),
+            ocrEnabled = p.getBoolean(Keys.OCR_ON, true),
         )
 
     }
@@ -305,6 +324,7 @@ class ConfigStore(context: Context) {
             .putInt(Keys.PROXY_PORT, d.proxyPort.coerceIn(1024, 65535))
             .putBoolean(Keys.WHITELIST_ON, d.whitelistEnabled)
             .putStringSet(Keys.WHITELIST, d.whitelist.map { Roles.normalizeKey(it) }.filter { it.isNotBlank() }.toHashSet())
+            .putBoolean(Keys.OCR_ON, d.ocrEnabled)
             .apply()
     }
 
@@ -396,6 +416,20 @@ class ConfigStore(context: Context) {
     /** 上次拉取的现场说明 + 时间戳（空串 / 0 = 还没拉过）。 */
     fun chatPullInfo(): Pair<String, Long> =
         sp.getString(Keys.CHAT_INFO, "").orEmpty() to sp.getLong(Keys.CHAT_AT, 0L)
+
+    /**
+     * 只改「图片文字识别」这一个开关，**立刻落盘**。
+     *
+     * 跟白名单 / 本地代理同一个道理：这类开关改完就该生效，不该等那个管整页的「保存」按钮 ——
+     * 而高级设置页恰恰是「一个保存按钮管整页」的，混着来最容易出现「我明明开了怎么没用」。
+     */
+    fun saveOcr(enabled: Boolean) {
+        sp.edit().putBoolean(Keys.OCR_ON, enabled).apply()
+    }
+
+    /** 注入侧回传：最近一次图片识别的结果 + 时间戳（空串 / 0 = 还没试过）。 */
+    fun ocrInfo(): Pair<String, Long> =
+        sp.getString(Keys.OCR_INFO, "").orEmpty() to sp.getLong(Keys.OCR_AT, 0L)
 
     /** 注入侧最近一次实际走的路线（proxy / direct；空 = 还没回传过）+ 时间戳。 */
     fun lastRoute(): Pair<String, Long> =

@@ -23,8 +23,34 @@ object ProxyProtocol {
     const val PATH_CHAT = "/proxy/chat/completions"
     const val PATH_HEALTH = "/proxy/health"
 
+    /** 图片文字识别：注入侧把图 POST 上来，App 认完把**文字**放在响应体里还回去。 */
+    const val PATH_OCR = "/proxy/ocr"
+
+    /**
+     * 送去识别的图：最长边（px）与最大字节数。
+     *
+     * 图是走回环从微信进程传到 App 的（两个进程不同 UID，只能这么传），所以要压：
+     * 最长边 1280 + JPEG q82 之后，一张聊天截图通常 100~400KB —— 识别精度基本不受影响，
+     * 但内存和传输成本差一个量级。超上限的图直接不认（宁可回落成 [图片] 占位，也不能卡住整轮分析）。
+     */
+    const val OCR_MAX_SIDE = 1280
+    const val OCR_MAX_BYTES = 3_000_000
+
+    /**
+     * 这次该不该去认图。
+     *
+     * 两个条件缺一不可：**开关开着** + **走的是本地代理**。
+     * 认字这件事在 App 进程做（ML Kit 只装在 App 里），没走代理就没有地方认 ——
+     * 那时候去连回环只会白等一次超时，所以宁可提前跳过，回落成老占位。
+     */
+    fun ocrUsable(ocrEnabled: Boolean, route: String): Boolean =
+        ocrEnabled && route == ROUTE_PROXY
+
     /** 注入侧要访问的地址（只可能是本机回环）。 */
     fun urlFor(port: Int, path: String = PATH_CHAT): String = "http://127.0.0.1:$port$path"
+
+    /** 图片识别那一跳的地址。 */
+    fun ocrUrl(port: Int): String = urlFor(port, PATH_OCR)
 
     /** 解析 `Authorization: Bearer xxx`；格式不对/空白一律 null。 */
     fun bearerToken(header: String?): String? {

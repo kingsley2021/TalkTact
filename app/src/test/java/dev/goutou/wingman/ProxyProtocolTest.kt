@@ -28,6 +28,20 @@ class ProxyProtocolTest {
     }
 
     @Test
+    fun `识图那一跳也在回环上`() {
+        assertEquals("/proxy/ocr", ProxyProtocol.PATH_OCR)
+        assertEquals("http://127.0.0.1:8799/proxy/ocr", ProxyProtocol.ocrUrl(8799))
+    }
+
+    @Test
+    fun `没走本地代理就不去认图`() {
+        // 认字是在 App 进程里做的：没走代理就没有地方认，这时候去连回环只会白等一次超时
+        assertTrue(ProxyProtocol.ocrUsable(true, ProxyProtocol.ROUTE_PROXY))
+        assertFalse(ProxyProtocol.ocrUsable(false, ProxyProtocol.ROUTE_PROXY))
+        assertFalse(ProxyProtocol.ocrUsable(true, ProxyProtocol.ROUTE_DIRECT))
+    }
+
+    @Test
     fun `没配 token 时一律拒绝`() {
         // 空 token 是「还没生成」的状态，这时候绝不能放行（否则任何 App 都能白蹭额度）
         assertFalse(ProxyProtocol.isAuthorized("Bearer ", ""))

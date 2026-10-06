@@ -13,6 +13,20 @@ android {
         targetSdk = 34
         versionCode = 35
         versionName = "0.8.8"
+
+        /**
+         * 只打包 arm 两种 ABI。
+         *
+         * 图片 OCR 用的 ML Kit 内置模型带一个 ~11MB 的原生库 `libmlkit_google_ocr_pipeline.so`，
+         * 而它给 4 个 ABI 各备了一份（合起来 40MB+）；这些 .so 在 APK 里是**不压缩**存放的，
+         * 4 份全带上光这一项就要多出 40MB。真机只有 arm64-v8a（绝大多数）和 armeabi-v7a（老机器），
+         * x86/x86_64 是模拟器才有的东西 —— 所以这里收窄掉。
+         *
+         * 注：微信跑在哪个 ABI、模块就跟着哪个；两种 arm 都留着，避免 32 位设备上「装不上 / 认不出图」。
+         */
+        ndk {
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+        }
     }
     /**
      * 发布签名：**密钥不进仓库**。
@@ -85,6 +99,12 @@ dependencies {
     // 「每天中午 12:00 提炼说话风格」用它的周期任务：App 没开、手机重启过都照跑，
     // 也不必申请精确闹钟权限（AlarmManager 那条路 Android 12+ 要额外权限）
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+
+    // 图片文字识别（OCR）：ML Kit 的**内置**中文模型 —— 完全离线、不依赖 Play 服务、不要联网下载模型。
+    // 它只在 **App 进程**里用（proxy/ProxyServer.kt 的 /proxy/ocr 那条路由），
+    // 注入到微信里的那段代码绝不会碰到它 —— 模型和原生库太重，也不该塞进微信的进程。
+    // 代价：APK 里多一份模型 + 一个原生库（ABI 已在 defaultConfig 里收窄，见上面的说明）。
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 
     // 现代 Xposed API（libxposed）。必须是 compileOnly：这些类由框架在运行时提供，
     // 打进 APK 反而会和框架自己那份撞车。

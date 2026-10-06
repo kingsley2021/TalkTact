@@ -35,6 +35,8 @@ object Heartbeat {
         chats: String? = null,
         /** 上面那次拉取的现场说明（扫到几个列表 / 几行），拉不到东西时靠它排查 */
         chatsInfo: String? = null,
+        /** 图片文字识别：最近一次的结果（认到几个字 / 为什么没认），设置页显示它 */
+        ocr: String? = null,
     ) {
         try {
             val intent = Intent(ACTION).setPackage(MODULE_PKG).putExtra("tokens", tokens)
@@ -45,6 +47,7 @@ object Heartbeat {
             if (route != null) intent.putExtra("route", route)
             if (chats != null) intent.putExtra("chats", chats)
             if (chatsInfo != null) intent.putExtra("chatsInfo", chatsInfo)
+            if (ocr != null) intent.putExtra("ocr", ocr)
             context.sendBroadcast(intent, PERMISSION)
         } catch (t: Throwable) {
             // 广播失败不影响主流程
@@ -78,6 +81,11 @@ class HeartbeatReceiver : BroadcastReceiver() {
         intent.getStringExtra("route")?.let {
             editor.putString(Keys.ROUTE, it)
             editor.putLong(Keys.ROUTE_AT, System.currentTimeMillis())
+        }
+        // 图片文字识别：最近一次认了什么 / 为什么没认，设置页的 OCR 卡显示它
+        intent.getStringExtra("ocr")?.let {
+            editor.putString(Keys.OCR_INFO, it)
+            editor.putLong(Keys.OCR_AT, System.currentTimeMillis())
         }
         // 会话名候选：给「白名单」页用。名字统一走 normalizeKey —— 微信标题常带未读数（张三(3)），
         // 而白名单里存的本来就是归一化过的 key，两边必须同一套，否则「拉回来却勾不上」。
