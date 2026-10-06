@@ -1098,12 +1098,7 @@ internal class Panel(private val a: Activity) {
             val failure = err
             handler.post {
                 runCatching {
-                    if (gen != generation) {
-                        body.text = "$head｜$original"
-                        opts.visibility = View.VISIBLE
-                        busy = false
-                        return@runCatching
-                    }
+                    if (gen != generation) return@runCatching
                     busy = false
                     if (done != null) {
                         body.text = "$head｜$done"
