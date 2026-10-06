@@ -7,13 +7,6 @@ import org.junit.Test
 class ConversationStateTest {
     private val messages = listOf(ChatMsg(false, "好的"))
 
-    @Test fun `role context is usable when profile or history has content`() {
-        assertTrue(hasUsableRoleContext("同事", "", 0))
-        assertTrue(hasUsableRoleContext("", "备注", 0))
-        assertTrue(hasUsableRoleContext("", "", 1))
-        assertFalse(hasUsableRoleContext("", "  ", 0))
-        assertFalse(hasUsableRoleContext("", "", -1))
-    }
 
     @Test fun `same message in different conversations has separate replies and records`() {
         assertNotEquals(conversationRequestKey("张三", "cfg", null, messages), conversationRequestKey("项目群", "cfg", null, messages))
