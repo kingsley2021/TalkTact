@@ -65,14 +65,13 @@ object Ocr {
     fun cachedCount(): Int = synchronized(cache) { cache.size }
 
     private fun runRecognize(image: ByteArray, timeoutMs: Long): String {
-        // JPEG 的宽高：InputImage 其实不看它，但传 0 在个别版本上会判为非法输入，
-        // 所以只解一次「边界」（不解像素）拿真实尺寸 —— 这一步几乎不花钱。
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(image, 0, image.size, bounds)
-        val w = bounds.outWidth.coerceAtLeast(1)
-        val h = bounds.outHeight.coerceAtLeast(1)
+        // ⚠️ ML Kit 的 InputImage **不吃 JPEG 字节**（它只认 Bitmap / NV21 / YV12 / YUV_420_888，
+        // 压根没有 IMAGE_FORMAT_JPEG 这个常量）—— 所以先自己解成位图再喂进去。
+        // 进来的图已经被微信侧压到最长边 1280，解出来大约 10MB 上下，认完就回收。
+        val bitmap = BitmapFactory.decodeByteArray(image, 0, image.size)
+            ?: throw IllegalStateException("这张图解不开（不是有效图片？）")
 
-        val input = InputImage.fromByteArray(image, w, h, 0, InputImage.IMAGE_FORMAT_JPEG)
+        val input = InputImage.fromBitmap(bitmap, 0)
         val latch = CountDownLatch(1)
         var text: String? = null
         var failure: Throwable? = null
@@ -88,9 +87,10 @@ object Ocr {
                 latch.countDown()
             }
 
-        if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
-            throw IllegalStateException("识别超时（${timeoutMs}ms）")
-        }
+        val finished = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        // 超时就**别回收**：ML Kit 那边的任务可能还在读这张位图，回收了会崩 —— 交给 GC 慢慢收
+        if (finished) runCatching { bitmap.recycle() }
+        if (!finished) throw IllegalStateException("识别超时（${timeoutMs}ms）")
         failure?.let { throw IllegalStateException("识别失败：${it.message}", it) }
         return text.orEmpty()
     }
