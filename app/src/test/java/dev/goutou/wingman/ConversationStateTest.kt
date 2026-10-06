@@ -7,7 +7,6 @@ import org.junit.Test
 class ConversationStateTest {
     private val messages = listOf(ChatMsg(false, "好的"))
 
-
     @Test fun `same message in different conversations has separate replies and records`() {
         assertNotEquals(conversationRequestKey("张三", "cfg", null, messages), conversationRequestKey("项目群", "cfg", null, messages))
         assertNotEquals(roleObservationKey("张三", false, "好的"), roleObservationKey("李四", false, "好的"))
