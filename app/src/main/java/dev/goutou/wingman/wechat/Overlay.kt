@@ -104,6 +104,7 @@ internal class Panel(private val a: Activity) {
     private var running = false
     private var onChat = false
     private var busy = false
+    private var rewriteBusy = false
     private var force = false
     private var generation = 0
     private var cardTop = -1
@@ -200,6 +201,7 @@ internal class Panel(private val a: Activity) {
     fun onPause() {
         running = false
         busy = false
+        rewriteBusy = false
         onChat = false
         generation++
         expanded = false
@@ -462,6 +464,7 @@ internal class Panel(private val a: Activity) {
         if (revision != contextRevision) {
             generation++ // Discard replies and rewrites started for the previous conversation or profile.
             busy = false
+            rewriteBusy = false
             contextRevision = revision
             chatName = observedName
             lastScreenFingerprint = ""
@@ -591,6 +594,7 @@ internal class Panel(private val a: Activity) {
         val roleContext = roleContextFor(chatName, msgs)
         val requestKey = conversationRequestKey(chatName, settings, roleContext, msgs)
         lastFingerprint = requestKey
+        if (rewriteBusy) return
         if (busy) {
             if (pendingRequestKey == requestKey) return
             generation++
@@ -1076,13 +1080,13 @@ internal class Panel(private val a: Activity) {
             showMessage("读不到配置，改写用不了", isError = true)
             return
         }
-        if (busy) return
+        if (busy || rewriteBusy) return
         opts.visibility = View.GONE
         val gen = generation
         val requestKey = lastFingerprint
         val original = reply.text
         body.text = "$head｜改写中…"
-        busy = true
+        rewriteBusy = true
         Thread {
             var text: String? = null
             var err: Throwable? = null
@@ -1099,7 +1103,7 @@ internal class Panel(private val a: Activity) {
             handler.post {
                 runCatching {
                     if (gen != generation) return@runCatching
-                    busy = false
+                    rewriteBusy = false
                     if (done != null) {
                         body.text = "$head｜$done"
                         val cur = cache[requestKey] ?: shown
