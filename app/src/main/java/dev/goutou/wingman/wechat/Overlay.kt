@@ -1329,6 +1329,10 @@ internal class Panel(private val a: Activity) {
     private fun hideAll() {
         onChat = false
         noListTicks = 0
+        // Leaving the chat surface invalidates every async result captured from it.
+        generation++
+        busy = false
+        rewriteBusy = false
         expanded = false
         hasResult = false
         card.visibility = View.GONE
