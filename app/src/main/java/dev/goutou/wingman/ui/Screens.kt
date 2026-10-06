@@ -41,6 +41,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -97,6 +99,7 @@ import dev.goutou.wingman.llm.RemoteSkill
 import dev.goutou.wingman.llm.Graded
 import dev.goutou.wingman.llm.REWRITE_PRESETS
 import dev.goutou.wingman.llm.Suggestion
+import dev.goutou.wingman.llm.ModelList
 import dev.goutou.wingman.llm.gradedWaitMs
 import dev.goutou.wingman.llm.isReplyTooLong
 import dev.goutou.wingman.wechat.ChatMsg
@@ -447,20 +450,33 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                 val targetIp by produceState<String?>(null, tick) {
                     value = withContext(Dispatchers.IO) { NetInfo.resolve(host) }
                 }
-                // 归属地：要问第三方，拿不到就 null（缓存 10 分钟；点「开始自检」会强制重查）
-                val localGeo by produceState<Geo?>(null, tick) {
-                    value = withContext(Dispatchers.IO) { NetInfo.geo() }
+                // 归属地：要问第三方，拿不到就 null（缓存 10 分钟；点「开始自检」会强制重查）。
+                // 关掉开关就一次都不问；地址也能换成自己的（见「高级设置 → 网络信息」）。
+                val geoUrl = remember(cfg.geoEndpoint) { cfg.geoEndpoint.trim().ifBlank { NetInfo.GEO_ENDPOINT } }
+                val localGeo by produceState<Geo?>(null, tick, cfg.geoEnabled, geoUrl) {
+                    value = if (!cfg.geoEnabled) null
+                    else withContext(Dispatchers.IO) { NetInfo.geo(geoUrl) }
                 }
-                val targetGeo by produceState<Geo?>(null, tick, targetIp) {
-                    value = withContext(Dispatchers.IO) { targetIp?.let { NetInfo.geo(ip = it) } }
+                val targetGeo by produceState<Geo?>(null, tick, targetIp, cfg.geoEnabled, geoUrl) {
+                    value = if (!cfg.geoEnabled || targetIp == null) null
+                    else withContext(Dispatchers.IO) { NetInfo.geo(geoUrl, ip = targetIp) }
                 }
 
                 Spacer(Modifier.height(10.dp))
                 NetRow("本机内网", localIp)
-                NetRow("本机公网", joinInfo(localGeo?.ip, localGeo?.province ?: localGeo?.country, localGeo?.isp))
+                NetRow(
+                    "本机公网",
+                    if (!cfg.geoEnabled) "（归属地查询已关闭）"
+                    else joinInfo(localGeo?.ip, localGeo?.province ?: localGeo?.country, localGeo?.isp),
+                )
                 NetRow("目标服务器", joinInfo(targetIp, targetGeo?.province ?: targetGeo?.country), host)
                 Spacer(Modifier.height(4.dp))
-                Text("省份来自第三方 IP 库，仅供参考；取不到就显示 null。", fontSize = 10.sp, color = palette.sub)
+                Text(
+                    if (!cfg.geoEnabled) "归属地查询已在「高级设置 → 网络信息」里关掉（IP 仍然只在本机解析）。"
+                    else "省份来自第三方 IP 库，仅供参考；取不到就显示 null。可在「高级设置 → 网络信息」里关掉或换接口。",
+                    fontSize = 10.sp,
+                    color = palette.sub,
+                )
 
                 Spacer(Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1140,6 +1156,14 @@ fun AdvancedScreen(
     var d by remember { mutableStateOf(ui) }
     var includeKey by remember { mutableStateOf(true) }
     var backupNote by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    // 「拉取模型列表」：拉回来存本机（列表 + 时间），进页面读缓存；手动输入永远保留
+    val cachedModels = remember { store.modelList() }
+    var models by remember { mutableStateOf(cachedModels.first) }
+    var modelsAt by remember { mutableStateOf(cachedModels.second) }
+    var modelsOpen by remember { mutableStateOf(false) }
+    var modelsNote by remember { mutableStateOf<String?>(null) }
+    var pulling by remember { mutableStateOf(false) }
     // 「有没有还没点保存的改动」：拿草稿和**上次落盘的那份**比。
     // 不能只看一个「保存过没有」的标志 —— 它一开始就是「没保存过」，
     // 会把刚打开的页面也说成「未保存」，红字就废了。
@@ -1154,6 +1178,45 @@ fun AdvancedScreen(
         store.save(d)
         d = store.load()
         persisted = d
+        onSaved()
+    }
+
+    /** 疑似非对话模型（embedding / tts 这些）排到后面 —— 只排序，不隐藏。 */
+    fun orderedModels(): List<String> =
+        models.filterNot { ModelList.looksNonChat(it) } + models.filter { ModelList.looksNonChat(it) }
+
+    /**
+     * 拉一次模型列表。用的是**当前草稿**里的地址与 Key（可能还没保存）——
+     * 「填完 Key 先试一下能不能拉」不用先按保存。失败也不清空手里那份：服务商偶尔抽风。
+     */
+    fun pullModels() {
+        pulling = true
+        modelsNote = null
+        val base = d.baseUrl
+        val key = d.apiKey
+        scope.launch {
+            val got = withContext(Dispatchers.IO) { runCatching { ModelList.fetch(base, key) } }
+            got.onSuccess { list ->
+                models = list
+                modelsAt = System.currentTimeMillis()
+                store.saveModelList(list)
+                modelsNote = if (list.isEmpty()) "接口通了，但没解析出模型名 —— 手动填吧" else "拉到 ${list.size} 个模型"
+            }.onFailure { t ->
+                modelsNote = "拉取失败：${t.message}"
+            }
+            pulling = false
+        }
+    }
+
+    /**
+     * 归属地的开关 / 地址：**立刻落盘**（跟白名单 / 识图 / 生成模式同一个道理）。
+     * 开关切换时会把当前地址草稿一起存下来 —— 免得「刚改完地址就切开关」把它弄丢。
+     */
+    fun saveGeoNow(enabled: Boolean, endpoint: String) {
+        store.saveGeo(enabled, endpoint)
+        val fresh = store.load()
+        d = d.copy(geoEnabled = fresh.geoEnabled, geoEndpoint = fresh.geoEndpoint)
+        persisted = fresh
         onSaved()
     }
 
@@ -1360,6 +1423,48 @@ fun AdvancedScreen(
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("模型") },
                 singleLine = true,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(
+                    onClick = { pullModels() },
+                    enabled = !pulling,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text(if (pulling) "拉取中…" else "从服务端拉取模型列表") }
+                if (models.isNotEmpty()) {
+                    Spacer(Modifier.width(8.dp))
+                    Box {
+                        OutlinedButton(onClick = { modelsOpen = true }, shape = RoundedCornerShape(14.dp)) {
+                            Text("选模型（${models.size}）")
+                        }
+                        DropdownMenu(expanded = modelsOpen, onDismissRequest = { modelsOpen = false }) {
+                            orderedModels().take(80).forEach { id ->
+                                DropdownMenuItem(
+                                    text = { Text(id, fontSize = 13.sp) },
+                                    onClick = {
+                                        update(d.copy(model = id))
+                                        modelsOpen = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            modelsNote?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, fontSize = 11.sp, color = if (it.startsWith("拉取失败")) palette.bad else palette.ok)
+            }
+            if (modelsAt > 0L) {
+                Spacer(Modifier.height(2.dp))
+                Text("上次拉取 ${formatTime(modelsAt)}（存在本机；换了接口 / Key 记得重新拉一次）", fontSize = 10.sp, color = palette.sub)
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "拉不到不代表接口不能用：有的服务商没这个接口，有的中转只回一份目录（列出来 ≠ 你的 Key 能用）。手动填一样用。",
+                fontSize = 10.sp,
+                color = palette.sub,
             )
             Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1975,6 +2080,55 @@ fun AdvancedScreen(
                 Spacer(Modifier.height(6.dp))
                 Text(it, fontSize = 11.sp, color = palette.ok)
             }
+        }
+
+        GlassCard(d.glassAlpha) {
+            Text("网络信息（归属地）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text(
+                "「运行状态 → 接口自检」里那两行省份，是拿 IP 去问第三方库要的 —— 这是整个模块唯一一处" +
+                    "会把 IP 发给别人的地方。关掉之后自检只显示 IP，一次都不问。",
+                fontSize = 11.sp,
+                color = palette.sub,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("查询 IP 归属地", fontSize = 15.sp, color = palette.text)
+                    Text(
+                        if (d.geoEnabled) "自检时带上省份（结果缓存 10 分钟）" else "已关闭：不请求任何第三方",
+                        fontSize = 11.sp,
+                        color = palette.sub,
+                    )
+                }
+                Switch(checked = d.geoEnabled, onCheckedChange = { saveGeoNow(it, d.geoEndpoint) })
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = d.geoEndpoint,
+                onValueChange = { update(d.copy(geoEndpoint = it)) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("自定义接口地址（留空 = 用内置的）") },
+                singleLine = true,
+                enabled = d.geoEnabled,
+            )
+            if (d.geoEnabled && d.geoEndpoint.trim() != persisted.geoEndpoint.trim()) {
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("地址还没保存", modifier = Modifier.weight(1f), fontSize = 11.sp, color = palette.bad)
+                    Button(
+                        onClick = { saveGeoNow(d.geoEnabled, d.geoEndpoint) },
+                        modifier = Modifier.height(42.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                    ) { Text("保存地址") }
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "自己填的地址要能返回 JSON（内置用的是 ip.useragentinfo.com）；认不出的字段一律当没有，不会报错。",
+                fontSize = 10.sp,
+                color = palette.sub,
+            )
         }
 
         GlassCard(d.glassAlpha) {

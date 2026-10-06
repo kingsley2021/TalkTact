@@ -102,6 +102,12 @@ object Keys {
     /** 注入侧回传：最近一次图片识别的结果（认出几个字 / 为什么没认），设置页显示它 */
     const val OCR_INFO = "last_ocr"
     const val OCR_AT = "last_ocr_at"
+    /** 归属地：关掉就完全不问第三方；自定义接口地址（留空 = 用内置那个） */
+    const val GEO_ON = "geo_on"
+    const val GEO_ENDPOINT = "geo_endpoint"
+    /** 从服务端拉回来的模型列表（一行一个）+ 时间戳（0 = 还没拉过） */
+    const val MODEL_LIST = "model_list"
+    const val MODEL_LIST_AT = "model_list_at"
 }
 
 /** 默认几点跑。 */
@@ -202,6 +208,15 @@ data class ConfigData(
      * 所以**必须先开「本地代理」**，否则注入侧连不上回环端口，会直接跳过（回落成 [ATTACHMENT_TEXT]）。
      */
     val ocrEnabled: Boolean = true,
+    /**
+     * 查 IP 归属地（「运行状态 → 接口自检」里那两行省份）。默认开。
+     *
+     * 归属地是**整个模块唯一**一处会把你的 IP 发给第三方的地方（见 llm/NetInfo.kt）——
+     * 所以给一个开关：关掉之后自检只显示 IP，不再问任何人。
+     */
+    val geoEnabled: Boolean = true,
+    /** 归属地接口地址。留空 = 用内置的 `ip.useragentinfo.com`；换成别的只要返回 JSON 里有 province/country/isp 就行。 */
+    val geoEndpoint: String = "",
 ) {
     /**
      * 分级模式下「风险评估」那一路要用的接口。
@@ -270,6 +285,8 @@ data class ConfigData(
                 .filter { it.isNotBlank() }
                 .toSet(),
             ocrEnabled = p.getBoolean(Keys.OCR_ON, true),
+            geoEnabled = p.getBoolean(Keys.GEO_ON, true),
+            geoEndpoint = p.getString(Keys.GEO_ENDPOINT, "").orEmpty(),
         )
 
     }
@@ -325,6 +342,8 @@ class ConfigStore(context: Context) {
             .putBoolean(Keys.WHITELIST_ON, d.whitelistEnabled)
             .putStringSet(Keys.WHITELIST, d.whitelist.map { Roles.normalizeKey(it) }.filter { it.isNotBlank() }.toHashSet())
             .putBoolean(Keys.OCR_ON, d.ocrEnabled)
+            .putBoolean(Keys.GEO_ON, d.geoEnabled)
+            .putString(Keys.GEO_ENDPOINT, d.geoEndpoint.trim())
             .apply()
     }
 
@@ -436,6 +455,35 @@ class ConfigStore(context: Context) {
      */
     fun saveGraded(graded: Boolean) {
         sp.edit().putBoolean(Keys.GRADED, graded).apply()
+    }
+
+    /**
+     * 归属地的开关 / 地址：**只写这两项、立刻落盘**（跟白名单 / 识图 / 生成模式同一个道理）。
+     * 这两个字段也参与整份 save()，所以设置页按「保存」时会照常一起写。
+     */
+    fun saveGeo(enabled: Boolean, endpoint: String) {
+        sp.edit()
+            .putBoolean(Keys.GEO_ON, enabled)
+            .putString(Keys.GEO_ENDPOINT, endpoint.trim())
+            .apply()
+    }
+
+    /** 拉回来的模型列表 + 时间戳（空列表 / 0 = 还没拉过）。一行一个存着，够用又不引序列化。 */
+    fun modelList(): Pair<List<String>, Long> {
+        val raw = sp.getString(Keys.MODEL_LIST, "").orEmpty()
+        val list = raw.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+        return list to sp.getLong(Keys.MODEL_LIST_AT, 0L)
+    }
+
+    /** 存模型列表（只写这两项，不走 save()）。 */
+    fun saveModelList(models: List<String>) {
+        sp.edit()
+            .putString(
+                Keys.MODEL_LIST,
+                models.map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString("\n"),
+            )
+            .putLong(Keys.MODEL_LIST_AT, System.currentTimeMillis())
+            .apply()
     }
 
     /** 注入侧回传：最近一次图片识别的结果 + 时间戳（空串 / 0 = 还没试过）。 */

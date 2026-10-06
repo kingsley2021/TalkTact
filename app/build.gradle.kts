@@ -11,21 +11,21 @@ android {
         applicationId = "io.github.shibry88_netizen.talktact"
         minSdk = 31  // Android 12+：液态玻璃的真实背景模糊走 RenderEffect
         targetSdk = 34
-        versionCode = 36
-        versionName = "0.8.9"
+        versionCode = 37
+        versionName = "0.8.10"
 
         /**
-         * 只打包 arm 两种 ABI。
+         * 只打包 arm64-v8a（0.8.10 起）。
          *
          * 图片 OCR 用的 ML Kit 内置模型带一个 ~11MB 的原生库 `libmlkit_google_ocr_pipeline.so`，
-         * 而它给 4 个 ABI 各备了一份（合起来 40MB+）；这些 .so 在 APK 里是**不压缩**存放的，
-         * 4 份全带上光这一项就要多出 40MB。真机只有 arm64-v8a（绝大多数）和 armeabi-v7a（老机器），
-         * x86/x86_64 是模拟器才有的东西 —— 所以这里收窄掉。
+         * 它给 4 个 ABI 各备了一份（合起来 40MB+）；这些 .so 在 APK 里是**不压缩**存放的，
+         * 带上 2 份 arm 就要多出十几 MB。x86 / x86_64 是模拟器才有的东西，一直不带。
          *
-         * 注：微信跑在哪个 ABI、模块就跟着哪个；两种 arm 都留着，避免 32 位设备上「装不上 / 认不出图」。
+         * ⚠️ 代价：**32 位老设备（armeabi-v7a）装不上这个包了**。想恢复 32 位支持，
+         * 把 "armeabi-v7a" 加回下面那一行即可（微信跑在哪个 ABI、模块就跟着哪个）。
          */
         ndk {
-            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+            abiFilters.addAll(listOf("arm64-v8a"))
         }
     }
     /**
