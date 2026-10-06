@@ -14,8 +14,8 @@ internal fun conversationDigest(vararg fields: String): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
-internal fun stableConversationName(previous: String, observed: String): String =
-    observed.trim().takeIf { it.isNotEmpty() } ?: previous
+internal fun hasUsableRoleContext(relation: String, note: String, olderMessageCount: Int): Boolean =
+    relation.isNotBlank() || note.isNotBlank() || olderMessageCount > 0
 
 internal fun conversationRequestKey(name: String, settings: String, context: String?, msgs: List<ChatMsg>): String =
     conversationDigest(name, settings, context.orEmpty(), *msgs.map {
