@@ -520,7 +520,7 @@ internal class ViewReader(private val a: Activity) {
         // 只有「像附件的一行」才去找图（有正文的行不用管图），顺手记下现场。
         // 找不到就照旧 null —— 没有这一步时是什么样，现在还是什么样。
         val scan = if (bubble?.text == null || isGenericAttachment(bubble.text.orEmpty())) {
-            scanImage(row)
+            scanImage(row, bubble?.text)
         } else {
             null
         }
@@ -532,12 +532,14 @@ internal class ViewReader(private val a: Activity) {
     /** 一次「找图」的结果：命中的控件 + 一句话现场（诊断用）。 */
     private class ImgScan(val hit: ImgHit?, val probe: String)
 
-    /** 一个候选控件：尺寸、嵌套深度、取像素的方式、一句描述。 */
+    /** 一个候选控件：尺寸、嵌套深度、够不够「大」、取像素的方式、一句描述。 */
     private class ImgHit(
         val view: View,
         val w: Int,
         val h: Int,
         val depth: Int,
+        /** 短边 > 84dp 且不是文字控件 —— 头像 / 表情都在这个门槛以下 */
+        val big: Boolean,
         /** true = 只能靠 view.draw() 画出来（不是 ImageView，或者它的 drawable 不是位图） */
         val viaDraw: Boolean,
         val kind: String,
@@ -546,33 +548,34 @@ internal class ViewReader(private val a: Activity) {
     /**
      * 在一行里找那张「消息图」，顺便给出一句「看到了什么」。
      *
-     * 判据只有尺寸，不认类名（微信一改版本类名就变）：**短边 > 84dp、面积 ≥ 这一行的 40%、
-     * 且不是文字控件**。头像（24~84dp 的方形）在这条线以下，表情 / 贴纸一般也是小图，
-     * 而照片和聊天截图都远大于它。
+     * 判据只看尺寸，不认类名（微信一改版本类名就变）：**短边 > 84dp 且不是文字控件**。
+     * 头像（24~84dp 的方形）和表情都在这个门槛以下。
      *
-     * 取像素分两档：
-     * 1. ImageView + BitmapDrawable → 直接拿原始位图（最清楚、也最省）；
-     * 2. 其他大控件 → `view.draw()` 画进一张位图。
-     *    第 2 档是**兜底**：微信 8.0.78 的正文大量是自绘的（正文文字就是这样），
-     *    图片不一定老实待在 ImageView 里 —— 真机反馈「图上有字却一个字都没认」，
-     *    最可能就是第 1 档没命中。画出来的只有屏幕上那点像素、会糊一些，但比什么都没有强。
+     * ⚠️ 这里**只排除 GONE，不看 isShown** —— 微信把内容塞进 INVISIBLE 的占位控件里是老毛病了
+     * （[readRow] 读文字时也是这么放宽的），而 `view.draw()` 对 INVISIBLE 的控件照样画得出内容。
+     * 第 19 版用了 isShown，真机上就报「图明明在那儿，却一个候选都没有」。
      *
-     * 挑哪个：**叶子优先**（图本身就是叶子），一个叶子都没有才退到「最深的大容器」——
-     * 容器链（行 → 气泡 → 图片）里，最深那个才是内容本身。
+     * 取像素分两档：① ImageView + BitmapDrawable → 直接拿原始位图（最清楚也最省）；
+     * ② 其他控件 → `view.draw()` 画进位图（自绘的只能这么取，且必须在主线程）。
+     *
+     * 挑哪个（从好到差）：[大 + 叶子] → [大 + 最深容器] → [任意叶子，排除贴边方图 = 头像] → [任意非根视图]。
+     * 后两档是**兜底**：宁可认错一张（认不出字就回落成占位），也别一个候选都不给。
      */
-    private fun scanImage(row: View): ImgScan {
+    private fun scanImage(row: View, bubbleText: String?): ImgScan {
         val rowW = if (row.width > 0) row.width else row.measuredWidth
         val rowH = if (row.height > 0) row.height else row.measuredHeight
-        val rowArea = (rowW * rowH).coerceAtLeast(1)
         val minSide = dp(84)
-        val hits = ArrayList<ImgHit>(4)
-        var biggest: ImgHit? = null
+        val tiny = dp(32)
+        val hits = ArrayList<ImgHit>(8)
+        val top = ArrayList<ImgHit>(4)
+        var visited = 0
 
         fun visit(v: View, depth: Int) {
+            visited++
             val w = if (v.width > 0) v.width else v.measuredWidth
             val h = if (v.height > 0) v.height else v.measuredHeight
-            val big = w > 0 && h > 0 && minOf(w, h) > minSide && w * h >= rowArea * 2 / 5
-            if (big && v !is TextView && v !is EditText && v.isShown) {
+            val isText = v is TextView || v is EditText
+            if (!isText && w > 0 && h > 0 && v.visibility != View.GONE && minOf(w, h) >= tiny) {
                 val iv = v as? ImageView
                 val bmp = (iv?.drawable as? BitmapDrawable)?.bitmap?.takeIf { !it.isRecycled }
                 val hit = ImgHit(
@@ -580,6 +583,7 @@ internal class ViewReader(private val a: Activity) {
                     w = w,
                     h = h,
                     depth = depth,
+                    big = minOf(w, h) > minSide,
                     viaDraw = bmp == null,
                     kind = v.javaClass.simpleName + when {
                         bmp != null -> "（位图 ${bmp.width}x${bmp.height}）"
@@ -588,22 +592,45 @@ internal class ViewReader(private val a: Activity) {
                     },
                 )
                 hits.add(hit)
-                val cur = biggest
-                if (cur == null || w * h > cur.w * cur.h) biggest = hit
+                top.add(hit)
+                if (top.size > 3) {
+                    top.sortByDescending { it.w * it.h }
+                    top.removeAt(3)
+                }
             }
             if (v is ViewGroup) for (i in 0 until v.childCount) visit(v.getChildAt(i), depth + 1)
         }
         visit(row, 0)
 
-        val hit = hits.filter { it.view !is ViewGroup }.maxByOrNull { it.w * it.h }
-            ?: hits.filter { it.view !== row }.maxByOrNull { it.depth * 10_000_000 + it.w * it.h }
-
-        val top = biggest
-        val probe = if (top == null) {
-            "候选 0（行内没有短边 >84dp 的非文字控件）"
-        } else {
-            "候选 ${hits.size}｜最大 ${top.kind} ${top.w}x${top.h}"
+        // 头像：正方形 + 贴在两侧（和 readRow 里认头像的规则同一套）
+        fun isAvatarLike(h: ImgHit): Boolean {
+            if (abs(h.w - h.h) > dp(4)) return false
+            val cx = centerX(h.view)
+            return cx < width * 0.25 || cx > width * 0.75
         }
+
+        val hit = hits.filter { it.big && it.view !is ViewGroup }.maxByOrNull { it.w * it.h }
+            ?: hits.filter { it.big && it.view !== row }.maxByOrNull { it.depth * 10_000_000 + it.w * it.h }
+            ?: hits.filter { it.view !is ViewGroup && !isAvatarLike(it) }.maxByOrNull { it.w * it.h }
+            // 最后一档连「这一行本身」都收：万一图是这一行（或列表）自己 onDraw 画出来的，
+            // 画整行至少能把那点像素捞回来 —— 认不出字也只是回落成占位，没有额外代价。
+            ?: hits.maxByOrNull { it.w * it.h }
+
+        val probe = buildString {
+            append("行 ").append(rowW).append('x').append(rowH).append(" 视图 ").append(visited)
+            bubbleText?.takeIf { it.isNotBlank() }?.let { append(" 正文=「").append(it.take(10)).append("」") }
+            append("｜")
+            if (top.isEmpty()) {
+                append("行内没有非文字控件（短边 >").append(tiny).append("px）")
+            } else {
+                top.sortedByDescending { it.w * it.h }.forEachIndexed { index, h ->
+                    if (index > 0) append("｜")
+                    append(index + 1).append(')').append(h.kind).append(' ')
+                    append(h.w).append('x').append(h.h).append(" v=").append(h.view.visibility)
+                }
+            }
+        }.take(240)
+
         return ImgScan(hit, probe)
     }
 

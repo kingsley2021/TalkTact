@@ -61,6 +61,9 @@ internal class ImageOcr {
      */
     private val keysOfTick = HashMap<RowImage, String>()
 
+    /** 本轮每个键对应的「找图现场」——认不出字时把它写进状态行（不然只看得出「没字」，看不出取错了图）。 */
+    private val probeOfKey = HashMap<String, String>()
+
     /** 有新的识别结果落地（让主循环强制重读一次）。 */
     @Volatile
     private var dirty = false
@@ -123,6 +126,7 @@ internal class ImageOcr {
 
             val key = sha256(bytes)
             keysOfTick[img] = key
+            row.imageProbe?.let { probeOfKey[key] = it }
             if (done.containsKey(key)) continue
             if (inFlight.contains(key)) {
                 pending = true
@@ -133,7 +137,7 @@ internal class ImageOcr {
 
             inFlight.add(key)
             pending = true
-            submit(key, bytes, cfg)
+            submit(key, bytes, cfg, probeOfKey[key])
         }
 
         // 这一屏连一张图都没找到，但确实有像附件的行 —— 直接把看到的现场写出来。
@@ -161,7 +165,7 @@ internal class ImageOcr {
             "｜最近=" + (line ?: "（还没有记录）")
     }
 
-    private fun submit(key: String, bytes: ByteArray, cfg: ConfigData) {
+    private fun submit(key: String, bytes: ByteArray, cfg: ConfigData, probe: String?) {
         pool.execute {
             try {
                 val started = System.currentTimeMillis()
@@ -171,7 +175,12 @@ internal class ImageOcr {
                     done[key] = text
                     inFlight.remove(key)
                     failed.remove(key)
-                    line = if (text.isEmpty()) "认了：这张图里没字 · ${cost}ms" else "认到 ${text.length} 字 · ${cost}ms"
+                    line = if (text.isEmpty()) {
+                        // 没认到字时把现场带上：这样能一眼看出「取的可能不是那张图」（比如兜底取成了头像）
+                        "认了：这张图里没字 · ${cost}ms" + (probe?.let { "｜$it" } ?: "")
+                    } else {
+                        "认到 ${text.length} 字 · ${cost}ms"
+                    }
                     dirty = true
                 }
             } catch (t: Throwable) {
