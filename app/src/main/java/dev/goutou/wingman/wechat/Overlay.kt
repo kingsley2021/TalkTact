@@ -1327,12 +1327,15 @@ internal class Panel(private val a: Activity) {
     }
 
     private fun hideAll() {
+        // In a non-chat page this runs on every tick; invalidate async work only once
+        // when leaving an active chat/request state.
+        if (onChat || busy || rewriteBusy) {
+            generation++
+            busy = false
+            rewriteBusy = false
+        }
         onChat = false
         noListTicks = 0
-        // Leaving the chat surface invalidates every async result captured from it.
-        generation++
-        busy = false
-        rewriteBusy = false
         expanded = false
         hasResult = false
         card.visibility = View.GONE
