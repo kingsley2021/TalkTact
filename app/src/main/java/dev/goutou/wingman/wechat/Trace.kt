@@ -140,9 +140,15 @@ object Trace {
         clock = c
     }
 
-    /** 只给单测用：清空并还原时钟。 */
+    /**
+     * 只给单测用：清空并还原时钟。
+     *
+     * 注意 [seq] 也要一起归零：它是全局累加的（生产上 [clear] 刻意不回绕，好让序号能看出
+     * 中间被挤掉了几轮），但单测里若不重置，前一个用例留下的序号会让「#0 / #1」这类断言
+     * 变成看执行顺序碰运气 —— 单测必须可独立重复。
+     */
     fun resetForTest() {
-        synchronized(buf) { buf.clear(); ver = 0 }
+        synchronized(buf) { buf.clear(); seq = 0; ver = 0 }
         clock = { System.currentTimeMillis() }
     }
 }
