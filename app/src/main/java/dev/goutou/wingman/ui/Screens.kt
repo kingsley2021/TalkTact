@@ -726,14 +726,15 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
     var importing by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     var dialog by remember { mutableStateOf<String?>(null) }
-    var saved by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // 「有没有还没保存的改动」= 草稿提示词和**上次落盘的那份**比（跟「外观」「高级设置」同一套判据）。
+    // 不能只看一个「保存过没有」的标志 —— 刚进页面它就说你没保存，红字等于天天亮着。
+    val dirty = text != cfg.prompt
 
     fun persist(prompt: String, skillId: String, unlimited: Boolean) {
         store.save(store.load().copy(prompt = prompt, skillId = skillId, maxTokens = if (unlimited) 0 else store.load().maxTokens))
         cfg = store.load()
         text = cfg.prompt
-        saved = true
         onSaved()
     }
 
@@ -780,13 +781,17 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = text,
-                    onValueChange = { text = it; saved = false },
+                    onValueChange = { text = it },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 280.dp),
                 )
                 Spacer(Modifier.height(10.dp))
+                if (dirty) {
+                    Text("未保存，你所做出的改动不会被保存", fontSize = 11.sp, color = palette.bad)
+                    Spacer(Modifier.height(6.dp))
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
-                        onClick = { text = ConfigData().prompt; saved = false },
+                        onClick = { text = ConfigData().prompt },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(14.dp),
                     ) { Text("恢复默认") }
@@ -795,7 +800,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-                    ) { Text(if (saved) "已保存" else "保存") }
+                    ) { Text(if (dirty) "保存" else "已保存") }
                 }
             }
         } else {
@@ -821,7 +826,6 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                                 cfg = store.load()
                                 text = cfg.prompt
                                 tweak = false
-                                saved = true
                                 onSaved()
                                 dialog = "已启用「${skill.name}」。\n\nToken 限制已改为：无限制。"
                             }
@@ -909,10 +913,14 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = text,
-                        onValueChange = { text = it; saved = false },
+                        onValueChange = { text = it },
                         modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp),
                     )
                     Spacer(Modifier.height(10.dp))
+                    if (dirty) {
+                        Text("未保存，你所做出的改动不会被保存", fontSize = 11.sp, color = palette.bad)
+                        Spacer(Modifier.height(6.dp))
+                    }
                     Button(
                         onClick = {
                             // 内容跟哪个内置 skill 逐字一样，就还算那个 skill；动过了才算「自定义」
@@ -922,7 +930,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-                    ) { Text(if (saved) "已保存" else "保存") }
+                    ) { Text(if (dirty) "保存" else "已保存") }
                 }
             }
         }
@@ -1178,6 +1186,19 @@ fun AdvancedScreen(
         onSaved()
     }
 
+    /**
+     * 「生成模式」两个 pill 也**立刻落盘**（原因见 `ConfigStore.saveGraded`）。
+     * 只把这一项同步回草稿与「上次落盘的那份」—— 别的卡可能还在编辑、还没点保存，
+     * 不能整份覆盖，也不能让假红字亮起来。
+     */
+    fun saveGraded(on: Boolean) {
+        store.saveGraded(on)
+        val fresh = store.load()
+        d = d.copy(graded = fresh.graded)
+        persisted = fresh
+        onSaved()
+    }
+
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
             backupNote = try {
@@ -1283,6 +1304,17 @@ fun AdvancedScreen(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
         ScreenHeader("高级设置", "接口 · 分析 · 备份 · 诊断") {
             HeaderButton("← 返回", onBack)
+        }
+
+        // 这一页很长，页底那个红字常常不在视野里 —— 顶部也放一条，滚到哪儿都知道「有东西没存」。
+        // 只是提示，不强制：接口地址那种改一半的情况，本来就该由你决定什么时候存。
+        if (dirty) {
+            Text(
+                "⚠ 本页有未保存的改动（白名单 / 识图 / 生成模式是改完立刻生效，其余要按页底那个「保存」）",
+                fontSize = 11.sp,
+                color = palette.bad,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+            )
         }
 
         GlassCard(d.glassAlpha) {
@@ -1568,8 +1600,8 @@ fun AdvancedScreen(
             Text("生成模式", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                GlassPill("直通（一套接口）", !d.graded, Modifier.weight(1f)) { update(d.copy(graded = false)) }
-                GlassPill("模型分级", d.graded, Modifier.weight(1f)) { update(d.copy(graded = true)) }
+                GlassPill("直通（一套接口）", !d.graded, Modifier.weight(1f)) { saveGraded(false) }
+                GlassPill("模型分级", d.graded, Modifier.weight(1f)) { saveGraded(true) }
             }
             Spacer(Modifier.height(6.dp))
             Text(
@@ -1581,6 +1613,12 @@ fun AdvancedScreen(
                 },
                 fontSize = 11.sp,
                 color = palette.sub,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "这两个 pill 点一下就生效（立刻落盘，不用等页底那个「保存」）；下面的接口地址仍然是草稿。",
+                fontSize = 11.sp,
+                color = palette.ok,
             )
             if (d.graded) {
                 Spacer(Modifier.height(10.dp))
@@ -2562,7 +2600,10 @@ private fun RoleDetail(
     val palette = LocalPalette.current
     var relation by remember(role.key) { mutableStateOf(role.relation) }
     var note by remember(role.key) { mutableStateOf(role.note) }
-    var saved by remember(role.key) { mutableStateOf(false) }
+    // 跟「外观」「高级设置」「军师」同一套判据：草稿和上次落盘的那份比。
+    // 用本地快照而不是拿 role 再比一次 —— 上面刷新列表的时机不确定，靠 role 会出现「保存完红字还亮着」。
+    var persisted by remember(role.key) { mutableStateOf(role.relation to role.note) }
+    val dirty = (relation to note) != persisted
     var confirm by remember { mutableStateOf<String?>(null) }
     var renameOpen by remember { mutableStateOf(false) }
     var draft by remember(role.key) { mutableStateOf(role.name) }
@@ -2598,7 +2639,6 @@ private fun RoleDetail(
                     row.forEach { r ->
                         GlassPill(r, relation == r, Modifier.weight(1f)) {
                             relation = if (relation == r) "" else r
-                            saved = false
                         }
                     }
                     repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
@@ -2607,7 +2647,7 @@ private fun RoleDetail(
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(
                 value = note,
-                onValueChange = { note = it; saved = false },
+                onValueChange = { note = it },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
                 label = { Text("平时的关系（越具体越有用）") },
             )
@@ -2618,15 +2658,21 @@ private fun RoleDetail(
                 color = palette.sub,
             )
             Spacer(Modifier.height(10.dp))
+            if (dirty) {
+                Text("未保存，你所做出的改动不会被保存", fontSize = 11.sp, color = palette.bad)
+                Spacer(Modifier.height(6.dp))
+            }
             Button(
                 onClick = {
                     store.setRoleProfile(role.key, relation, note)
-                    saved = true
+                    persisted = relation to note
+                    // 顺手刷新外层列表：原来这里没通知，保存完返回还显示旧档案
+                    onChanged()
                 },
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-            ) { Text(if (saved) "已保存" else "保存") }
+            ) { Text(if (dirty) "保存" else "已保存") }
         }
 
         GlassCard(glassAlpha) {

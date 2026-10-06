@@ -427,6 +427,17 @@ class ConfigStore(context: Context) {
         sp.edit().putBoolean(Keys.OCR_ON, enabled).apply()
     }
 
+    /**
+     * 只改「生成模式」这一个开关，**立刻落盘**。
+     *
+     * 跟白名单 / 识图同一个道理：模式切换是开关型的选择，点完就该生效 —— 而这一页恰恰是
+     * 「一个保存按钮管整页」，接口地址、温度这些还都是草稿。两种行为混在一页最容易出现
+     * 「我明明点了，怎么还是老的」（白名单当初就是这么坑到的）。
+     */
+    fun saveGraded(graded: Boolean) {
+        sp.edit().putBoolean(Keys.GRADED, graded).apply()
+    }
+
     /** 注入侧回传：最近一次图片识别的结果 + 时间戳（空串 / 0 = 还没试过）。 */
     fun ocrInfo(): Pair<String, Long> =
         sp.getString(Keys.OCR_INFO, "").orEmpty() to sp.getLong(Keys.OCR_AT, 0L)

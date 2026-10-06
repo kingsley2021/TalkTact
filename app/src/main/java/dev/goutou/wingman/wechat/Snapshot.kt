@@ -101,6 +101,20 @@ private val GENERIC_ATTACHMENT = setOf(
 /** 这一行是不是「通用附件占位」——凡是这种行，都可以拿图里的字把它换掉。 */
 fun isGenericAttachment(t: String): Boolean = t.trim() in GENERIC_ATTACHMENT
 
+/**
+ * 「值得去找图认字」的行 —— 比 [GENERIC_ATTACHMENT] 窄得多。
+ *
+ * 只有图片 / 照片两类占位、以及模块自己那个通用占位才去找图。语音 / 视频 / 文件 / 位置
+ * 这些行里没有能认的文字，`[表情]` / `[动画表情]` 同理 —— 以前对着它们也要把控件画下来送去
+ * OCR，结果永远是「认了：这张图里没字」，白占一次后台识别，还让状态行一屏一屏地刷。
+ *
+ * ⚠️ 判定的是**微信给的占位**；正文为空（`null`，内容未知）那一支由调用方处理，仍会去找图。
+ */
+private val IMAGE_LIKE = setOf("[图片]", "[照片]", ATTACHMENT_TEXT)
+
+/** 这一行值不值得去找图认字（见 [IMAGE_LIKE]）。 */
+fun isImageLikeAttachment(t: String): Boolean = t.trim() in IMAGE_LIKE
+
 /** 认出来的图片文字写进上下文时的前缀（模型靠它知道「这是从图里认出来的，可能有错字」）。 */
 const val IMAGE_PREFIX = "[图片] "
 

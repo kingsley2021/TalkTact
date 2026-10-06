@@ -9,6 +9,7 @@ import dev.goutou.wingman.wechat.RowImage
 import dev.goutou.wingman.wechat.RowSnapshot
 import dev.goutou.wingman.wechat.Side
 import dev.goutou.wingman.wechat.TextNode
+import dev.goutou.wingman.wechat.isImageLikeAttachment
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -197,5 +198,37 @@ class ChatParserTest {
             listOf(row("[微笑]", 300, Side.OTHER, 0.35, false, image = img())),
         ) { "不该被用上" }
         assertEquals("[微笑]", msgs[0].text)
+    }
+
+    @Test
+    fun `语音视频文件位置行不值得去找图`() {
+        // 这些行里没有能认的文字 —— 以前对着它们也要把控件画下来送去 OCR，
+        // 结果永远是「认了：这张图里没字」，第 21 版起直接跳过。
+        assertFalse(isImageLikeAttachment("[语音]"))
+        assertFalse(isImageLikeAttachment("[视频]"))
+        assertFalse(isImageLikeAttachment("[文件]"))
+        assertFalse(isImageLikeAttachment("[链接]"))
+        assertFalse(isImageLikeAttachment("[位置]"))
+    }
+
+    @Test
+    fun `表情行不值得去找图`() {
+        assertFalse(isImageLikeAttachment("[表情]"))
+        assertFalse(isImageLikeAttachment("[动画表情]"))
+        // 具体表情名本来就不算附件（它是「有内容的文字消息」）
+        assertFalse(isImageLikeAttachment("[微笑]"))
+    }
+
+    @Test
+    fun `图片与照片行才去找图`() {
+        assertTrue(isImageLikeAttachment("[图片]"))
+        assertTrue(isImageLikeAttachment(" [照片] "))   // 带空白也认
+        assertTrue(isImageLikeAttachment(ATTACHMENT_TEXT))
+    }
+
+    @Test
+    fun `普通文字与空串都不去找图`() {
+        assertFalse(isImageLikeAttachment("在吗"))
+        assertFalse(isImageLikeAttachment(""))
     }
 }

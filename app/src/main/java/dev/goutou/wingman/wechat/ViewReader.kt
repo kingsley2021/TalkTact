@@ -517,9 +517,10 @@ internal class ViewReader(private val a: Activity) {
             }
         }
 
-        // 只有「像附件的一行」才去找图（有正文的行不用管图），顺手记下现场。
+        // 只有「值得找图的一行」才去找图（有正文的行不用管图；[语音] / [表情] 这类也跳过 ——
+        // 那些行里没有能认的文字，第 21 版起不再白认一次），顺手记下现场。
         // 找不到就照旧 null —— 没有这一步时是什么样，现在还是什么样。
-        val scan = if (bubble?.text == null || isGenericAttachment(bubble.text.orEmpty())) {
+        val scan = if (bubble?.text == null || isImageLikeAttachment(bubble.text.orEmpty())) {
             scanImage(row, bubble?.text)
         } else {
             null
@@ -558,8 +559,14 @@ internal class ViewReader(private val a: Activity) {
      * 取像素分两档：① ImageView + BitmapDrawable → 直接拿原始位图（最清楚也最省）；
      * ② 其他控件 → `view.draw()` 画进位图（自绘的只能这么取，且必须在主线程）。
      *
-     * 挑哪个（从好到差）：[大 + 叶子] → [大 + 最深容器] → [任意叶子，排除贴边方图 = 头像] → [任意非根视图]。
-     * 后两档是**兜底**：宁可认错一张（认不出字就回落成占位），也别一个候选都不给。
+     * 挑哪个（从好到差）：[大 + 叶子] → [大 + 最深容器] → [兜底：任意叶子，排除头像 / 方形小图，短边 ≥ 48dp]。
+     *
+     * 兜底那档是给「图不在大控件里」的真机情况留的（第 20 版实测确实有），但**收紧**过：
+     * 头像、表情包那种方形小图一律不算候选 —— 否则一屏表情包会一个接一个地白认。
+     *
+     * ⚠️ 第 21 版**删掉了「连整行本身都收」**那一档：整行画下来会把昵称、时间这些界面文字
+     * 一起认成消息内容（比「认不出来」更糟，还会被当成对方说的话）。现在宁可就这一行返回「没找到」，
+     * 回落成原来的 `[ATTACHMENT_TEXT]` 占位 —— 行为和装 OCR 之前一样。
      */
     private fun scanImage(row: View, bubbleText: String?): ImgScan {
         val rowW = if (row.width > 0) row.width else row.measuredWidth
@@ -609,12 +616,18 @@ internal class ViewReader(private val a: Activity) {
             return cx < width * 0.25 || cx > width * 0.75
         }
 
+        // 方形小图 = 头像 / 表情包那一类（和认头像同一套容差）。拿它们去 OCR 纯属白认。
+        fun looksSquareSmall(h: ImgHit): Boolean = abs(h.w - h.h) <= dp(4) && minOf(h.w, h.h) <= minSide
+
         val hit = hits.filter { it.big && it.view !is ViewGroup }.maxByOrNull { it.w * it.h }
             ?: hits.filter { it.big && it.view !== row }.maxByOrNull { it.depth * 10_000_000 + it.w * it.h }
-            ?: hits.filter { it.view !is ViewGroup && !isAvatarLike(it) }.maxByOrNull { it.w * it.h }
-            // 最后一档连「这一行本身」都收：万一图是这一行（或列表）自己 onDraw 画出来的，
-            // 画整行至少能把那点像素捞回来 —— 认不出字也只是回落成占位，没有额外代价。
-            ?: hits.maxByOrNull { it.w * it.h }
+            // 兜底档（第 21 版收紧）：排除头像 / 表情那种方形小图，且短边至少 48dp ——
+            // 把语音波形、小图标这类噪声挡在外面。原来还有一档「连整行都收」，已删除：
+            // 画整行会把昵称、时间这些界面文字一起喂进模型，比认不出来更糟。
+            ?: hits.filter {
+                it.view !is ViewGroup && !isAvatarLike(it) && !looksSquareSmall(it) &&
+                    minOf(it.w, it.h) >= dp(48)
+            }.maxByOrNull { it.w * it.h }
 
         val probe = buildString {
             append("行 ").append(rowW).append('x').append(rowH).append(" 视图 ").append(visited)
@@ -628,6 +641,8 @@ internal class ViewReader(private val a: Activity) {
                     append(index + 1).append(')').append(h.kind).append(' ')
                     append(h.w).append('x').append(h.h).append(" v=").append(h.view.visibility)
                 }
+                // 有候选却一个都没被选中：说清楚是被收紧规则挡掉的，省得又以为是「取不到图」
+                if (hit == null) append("｜⚠ 这些都没被采纳（太小 / 方形小图），这一行不认图")
             }
         }.take(240)
 
