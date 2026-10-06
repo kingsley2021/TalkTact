@@ -356,7 +356,15 @@ class LlmClient(
                         append("：").append(detail)
                     },
                 )
-                404 -> LlmException("接口地址 404", "地址一般要写到 /v1，例如 https://api.openai.com/v1")
+                404 -> LlmException(
+                    "接口返回 404",
+                    buildString {
+                        append("请求地址：").append(url)
+                        append("；模型：").append(cfg.model.ifBlank { "（空）" })
+                        if (detail.isNotBlank()) append("；服务商：").append(detail)
+                        append("。如果地址和模型都正确，检查服务商是否支持 /chat/completions；不要只按“地址要写到 /v1”处理")
+                    },
+                )
                 429 -> LlmException("被限流了（HTTP 429）", "等几秒再点「重新识别」，或把「最短调用间隔」调大", retryable = true)
                 in 500..599 -> LlmException("服务端错误（HTTP $code）", detail, retryable = true)
                 else -> LlmException("HTTP $code", detail)

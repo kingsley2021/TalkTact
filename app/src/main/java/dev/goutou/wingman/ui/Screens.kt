@@ -505,7 +505,9 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                                     var riskMs = 0L
                                     if (conf.graded) {
                                         try {
-                                            val r2 = withContext(Dispatchers.IO) { LlmClient(conf.riskEndpoint()).probe() }
+                                            val r2 = withContext(Dispatchers.IO) {
+                                                LlmClient(conf.riskEndpoint(), second = true).probe()
+                                            }
                                             if (r2.totalTokens > 0) store.addUsage(r2.totalTokens)
                                             riskMs = r2.totalMs
                                             sb.append("\n风险一路：连接 ")
