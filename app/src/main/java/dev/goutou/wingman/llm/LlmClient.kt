@@ -37,6 +37,14 @@ class LlmClient(
     private val cfg: ConfigData,
     /** 把「这次实际发出去的东西」交出去存档，null = 不记 */
     private val onTrace: ((String) -> Unit)? = null,
+    /**
+     * 这一路用的是**第二套接口**（分级模式的「风险评估」那一跳）。
+     *
+     * 只在走本地代理时有意义：代理只拿到一个 token，认不出「这一跳是谁」，所以这里带一个头
+     * 告诉它该用第一套还是第二套的地址与 Key（见 [ProxyProtocol.HEADER_ENDPOINT]）。
+     * 不带的话第二路会被代理按第一套转发 —— 症状是「第二套填对了却报 Key 不对」。
+     */
+    private val second: Boolean = false,
 ) {
 
     /**
@@ -308,6 +316,10 @@ class LlmClient(
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             conn.setRequestProperty("Accept", "application/json")
             conn.setRequestProperty("Authorization", authHeader())
+            // 代理那侧认不出「这一跳是谁」，得靠这个头告诉它用哪套接口（只对代理有意义）
+            if (viaProxy()) {
+                conn.setRequestProperty(ProxyProtocol.HEADER_ENDPOINT, ProxyProtocol.endpointHeader(second))
+            }
             conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
 
             val code = conn.responseCode
@@ -317,7 +329,17 @@ class LlmClient(
 
             val detail = Json.parse(body)?.at("error", "message").asStr() ?: body.take(160).replace('\n', ' ')
             throw when (code) {
-                401, 403 -> LlmException("鉴权失败（HTTP $code）", "Key 不对，或这个 Key 没有该模型的权限：$detail")
+                401, 403 -> LlmException(
+                    "鉴权失败（HTTP $code）",
+                    buildString {
+                        append("Key 不对，或这个 Key 没有该模型的权限")
+                        if (second) {
+                            append("（**这是第二套接口**：它的 Key 留空时会复用第一套的")
+                            append(" —— 两家服务商不同的话，就会拿第一套的 Key 去请求第二套的地址）")
+                        }
+                        append("：").append(detail)
+                    },
+                )
                 404 -> LlmException("接口地址 404", "地址一般要写到 /v1，例如 https://api.openai.com/v1")
                 429 -> LlmException("被限流了（HTTP 429）", "等几秒再点「重新识别」，或把「最短调用间隔」调大", retryable = true)
                 in 500..599 -> LlmException("服务端错误（HTTP $code）", detail, retryable = true)

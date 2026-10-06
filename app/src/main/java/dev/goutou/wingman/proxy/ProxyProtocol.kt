@@ -46,6 +46,25 @@ object ProxyProtocol {
     fun ocrUsable(ocrEnabled: Boolean, route: String): Boolean =
         ocrEnabled && route == ROUTE_PROXY
 
+    /**
+     * 「这一跳用哪套接口」。
+     *
+     * 分级模式有两套接口（写回复一路 / 风险评估一路），它们的地址、Key、模型都可能完全不同。
+     * 而代理那侧只拿到一个 token，**认不出「这一跳是谁」** —— 于是它会一律按第一套转发，
+     * 症状就是「第二套明明填对了，却报 Key 不对，而且报的是另一把 Key」。
+     * 所以由调用方在请求头里说明；没带 / 认不出 → 第一套（老行为）。
+     */
+    const val HEADER_ENDPOINT = "x-talktact-endpoint"
+    const val ENDPOINT_FIRST = "1"
+    const val ENDPOINT_SECOND = "2"
+
+    /** 解析「用哪套接口」的头：除了明确的 "2"，一律当第一套。 */
+    fun endpointOf(header: String?): String =
+        if (header?.trim() == ENDPOINT_SECOND) ENDPOINT_SECOND else ENDPOINT_FIRST
+
+    /** 这个头该写什么值（调用方用；[second] = 是不是「风险评估」那一路）。 */
+    fun endpointHeader(second: Boolean): String = if (second) ENDPOINT_SECOND else ENDPOINT_FIRST
+
     /** 注入侧要访问的地址（只可能是本机回环）。 */
     fun urlFor(port: Int, path: String = PATH_CHAT): String = "http://127.0.0.1:$port$path"
 

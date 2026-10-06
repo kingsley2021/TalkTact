@@ -42,6 +42,22 @@ class ProxyProtocolTest {
     }
 
     @Test
+    fun `第二套接口靠请求头区分，认不出就是第一套`() {
+        // 代理只看得到 token、看不到「这一跳是谁」，所以由调用方在头里说明用哪套接口
+        assertEquals(ProxyProtocol.ENDPOINT_SECOND, ProxyProtocol.endpointHeader(second = true))
+        assertEquals(ProxyProtocol.ENDPOINT_FIRST, ProxyProtocol.endpointHeader(second = false))
+
+        assertEquals(ProxyProtocol.ENDPOINT_SECOND, ProxyProtocol.endpointOf("2"))
+        assertEquals(ProxyProtocol.ENDPOINT_SECOND, ProxyProtocol.endpointOf(" 2 "))
+        // 没带 / 写了别的 / 大小写不对 —— 一律当第一套（老行为），绝不能猜成第二套
+        assertEquals(ProxyProtocol.ENDPOINT_FIRST, ProxyProtocol.endpointOf(null))
+        assertEquals(ProxyProtocol.ENDPOINT_FIRST, ProxyProtocol.endpointOf(""))
+        assertEquals(ProxyProtocol.ENDPOINT_FIRST, ProxyProtocol.endpointOf("1"))
+        assertEquals(ProxyProtocol.ENDPOINT_FIRST, ProxyProtocol.endpointOf("3"))
+        assertEquals(ProxyProtocol.ENDPOINT_FIRST, ProxyProtocol.endpointOf("second"))
+    }
+
+    @Test
     fun `没配 token 时一律拒绝`() {
         // 空 token 是「还没生成」的状态，这时候绝不能放行（否则任何 App 都能白蹭额度）
         assertFalse(ProxyProtocol.isAuthorized("Bearer ", ""))

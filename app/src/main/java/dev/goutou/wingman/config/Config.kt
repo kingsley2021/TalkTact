@@ -108,6 +108,9 @@ object Keys {
     /** 从服务端拉回来的模型列表（一行一个）+ 时间戳（0 = 还没拉过） */
     const val MODEL_LIST = "model_list"
     const val MODEL_LIST_AT = "model_list_at"
+    /** 第二套接口（分级模式的「风险评估」那一路）的模型列表 */
+    const val MODEL_LIST_2 = "model_list_2"
+    const val MODEL_LIST_2_AT = "model_list_2_at"
 }
 
 /** 默认几点跑。 */
@@ -468,21 +471,24 @@ class ConfigStore(context: Context) {
             .apply()
     }
 
-    /** 拉回来的模型列表 + 时间戳（空列表 / 0 = 还没拉过）。一行一个存着，够用又不引序列化。 */
-    fun modelList(): Pair<List<String>, Long> {
-        val raw = sp.getString(Keys.MODEL_LIST, "").orEmpty()
+    /**
+     * 拉回来的模型列表 + 时间戳（空列表 / 0 = 还没拉过）。一行一个存着，够用又不引序列化。
+     * [second] = 第二套接口（分级模式那一跳）——两套各存各的，它们常常是不同服务商。
+     */
+    fun modelList(second: Boolean = false): Pair<List<String>, Long> {
+        val raw = sp.getString(if (second) Keys.MODEL_LIST_2 else Keys.MODEL_LIST, "").orEmpty()
         val list = raw.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
-        return list to sp.getLong(Keys.MODEL_LIST_AT, 0L)
+        return list to sp.getLong(if (second) Keys.MODEL_LIST_2_AT else Keys.MODEL_LIST_AT, 0L)
     }
 
     /** 存模型列表（只写这两项，不走 save()）。 */
-    fun saveModelList(models: List<String>) {
+    fun saveModelList(models: List<String>, second: Boolean = false) {
         sp.edit()
             .putString(
-                Keys.MODEL_LIST,
+                if (second) Keys.MODEL_LIST_2 else Keys.MODEL_LIST,
                 models.map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString("\n"),
             )
-            .putLong(Keys.MODEL_LIST_AT, System.currentTimeMillis())
+            .putLong(if (second) Keys.MODEL_LIST_2_AT else Keys.MODEL_LIST_AT, System.currentTimeMillis())
             .apply()
     }
 

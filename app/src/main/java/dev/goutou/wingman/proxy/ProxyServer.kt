@@ -145,16 +145,22 @@ class ProxyServer(private val context: Context) {
                 ProxyState.lastResult = "拒绝：token 不对"
                 return respond(output, 403, errorBody("token 不对"))
             }
-            if (cfg.baseUrl.isBlank()) return respond(output, 502, errorBody("App 里还没填接口地址"))
-            if (cfg.apiKey.isBlank()) return respond(output, 502, errorBody("App 里还没填 API Key"))
+            // 分级模式有两套接口，而代理只看得到 token、认不出「这一跳是谁」——
+            // 所以由调用方在请求头里说明（见 ProxyProtocol.HEADER_ENDPOINT）。
+            // ⚠️ 这里以前是写死的 cfg：第二路会被按第一套转发 → 「第二套填对了却报 Key 不对」。
+            val second = ProxyProtocol.endpointOf(headers[ProxyProtocol.HEADER_ENDPOINT]) == ProxyProtocol.ENDPOINT_SECOND
+            val target = if (second) cfg.riskEndpoint() else cfg
+            val which = if (second) "第二套接口" else "接口地址"
+            if (target.baseUrl.isBlank()) return respond(output, 502, errorBody("App 里还没填$which"))
+            if (target.apiKey.isBlank()) return respond(output, 502, errorBody("App 里还没填$which 的 API Key"))
 
             val length = headers["content-length"]?.toIntOrNull() ?: 0
             val body = if (length > 0) ByteArray(length).also { readFully(input, it) } else ByteArray(0)
 
             val started = System.currentTimeMillis()
-            val upstream = forward(cfg.baseUrl, cfg.apiKey, body, headers["content-type"])
+            val upstream = forward(target.baseUrl, target.apiKey, body, headers["content-type"])
             val cost = System.currentTimeMillis() - started
-            ProxyState.lastResult = "转发 ${upstream.first} · ${cost}ms"
+            ProxyState.lastResult = "${if (second) "转发（第二套）" else "转发"} ${upstream.first} · ${cost}ms"
             respond(output, upstream.first, upstream.second)
         } catch (t: Throwable) {
             ProxyState.lastError = "转发异常：${t.message}"

@@ -602,7 +602,7 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
                                 val out = withContext(Dispatchers.IO) {
                                     Graded.run(
                                         replyClient = LlmClient(conf),
-                                        riskClient = LlmClient(conf.riskEndpoint()),
+                                        riskClient = LlmClient(conf.riskEndpoint(), second = true),
                                         skillPrompt = conf.prompt,
                                         msgs = msgs,
                                         roleContext = null,
@@ -1164,6 +1164,13 @@ fun AdvancedScreen(
     var modelsOpen by remember { mutableStateOf(false) }
     var modelsNote by remember { mutableStateOf<String?>(null) }
     var pulling by remember { mutableStateOf(false) }
+    // 第二套接口（分级模式那一跳）的模型列表：跟第一套各存各的
+    val cachedModels2 = remember { store.modelList(second = true) }
+    var models2 by remember { mutableStateOf(cachedModels2.first) }
+    var models2At by remember { mutableStateOf(cachedModels2.second) }
+    var models2Open by remember { mutableStateOf(false) }
+    var modelsNote2 by remember { mutableStateOf<String?>(null) }
+    var pulling2 by remember { mutableStateOf(false) }
     // 「有没有还没点保存的改动」：拿草稿和**上次落盘的那份**比。
     // 不能只看一个「保存过没有」的标志 —— 它一开始就是「没保存过」，
     // 会把刚打开的页面也说成「未保存」，红字就废了。
@@ -1182,29 +1189,42 @@ fun AdvancedScreen(
     }
 
     /** 疑似非对话模型（embedding / tts 这些）排到后面 —— 只排序，不隐藏。 */
-    fun orderedModels(): List<String> =
-        models.filterNot { ModelList.looksNonChat(it) } + models.filter { ModelList.looksNonChat(it) }
+    fun orderedModels(list: List<String>): List<String> =
+        list.filterNot { ModelList.looksNonChat(it) } + list.filter { ModelList.looksNonChat(it) }
 
     /**
      * 拉一次模型列表。用的是**当前草稿**里的地址与 Key（可能还没保存）——
      * 「填完 Key 先试一下能不能拉」不用先按保存。失败也不清空手里那份：服务商偶尔抽风。
      */
-    fun pullModels() {
-        pulling = true
-        modelsNote = null
-        val base = d.baseUrl
-        val key = d.apiKey
+    fun pullModels(second: Boolean = false) {
+        if (second) {
+            pulling2 = true
+            modelsNote2 = null
+        } else {
+            pulling = true
+            modelsNote = null
+        }
+        // 第二套留空 = 复用第一套（和「生成模式」里那三格的规矩一致）
+        val base = if (second) d.baseUrl2.trim().ifBlank { d.baseUrl } else d.baseUrl
+        val key = if (second) d.apiKey2.trim().ifBlank { d.apiKey } else d.apiKey
         scope.launch {
             val got = withContext(Dispatchers.IO) { runCatching { ModelList.fetch(base, key) } }
             got.onSuccess { list ->
-                models = list
-                modelsAt = System.currentTimeMillis()
-                store.saveModelList(list)
-                modelsNote = if (list.isEmpty()) "接口通了，但没解析出模型名 —— 手动填吧" else "拉到 ${list.size} 个模型"
+                val note = if (list.isEmpty()) "接口通了，但没解析出模型名 —— 手动填吧" else "拉到 ${list.size} 个模型"
+                if (second) {
+                    models2 = list
+                    models2At = System.currentTimeMillis()
+                    modelsNote2 = note
+                } else {
+                    models = list
+                    modelsAt = System.currentTimeMillis()
+                    modelsNote = note
+                }
+                store.saveModelList(list, second)
             }.onFailure { t ->
-                modelsNote = "拉取失败：${t.message}"
+                if (second) modelsNote2 = "拉取失败：${t.message}" else modelsNote = "拉取失败：${t.message}"
             }
-            pulling = false
+            if (second) pulling2 = false else pulling = false
         }
     }
 
@@ -1427,7 +1447,7 @@ fun AdvancedScreen(
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedButton(
-                    onClick = { pullModels() },
+                    onClick = { pullModels(second = false) },
                     enabled = !pulling,
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(14.dp),
@@ -1439,7 +1459,7 @@ fun AdvancedScreen(
                             Text("选模型（${models.size}）")
                         }
                         DropdownMenu(expanded = modelsOpen, onDismissRequest = { modelsOpen = false }) {
-                            orderedModels().take(80).forEach { id ->
+                            orderedModels(models).take(80).forEach { id ->
                                 DropdownMenuItem(
                                     text = { Text(id, fontSize = 13.sp) },
                                     onClick = {
@@ -1752,6 +1772,48 @@ fun AdvancedScreen(
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("模型（留空 = 复用）") },
                     singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(
+                        onClick = { pullModels(second = true) },
+                        enabled = !pulling2,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp),
+                    ) { Text(if (pulling2) "拉取中…" else "从服务端拉取模型列表（第二套）") }
+                    if (models2.isNotEmpty()) {
+                        Spacer(Modifier.width(8.dp))
+                        Box {
+                            OutlinedButton(onClick = { models2Open = true }, shape = RoundedCornerShape(14.dp)) {
+                                Text("选模型（${models2.size}）")
+                            }
+                            DropdownMenu(expanded = models2Open, onDismissRequest = { models2Open = false }) {
+                                orderedModels(models2).take(80).forEach { id ->
+                                    DropdownMenuItem(
+                                        text = { Text(id, fontSize = 13.sp) },
+                                        onClick = {
+                                            update(d.copy(model2 = id))
+                                            models2Open = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                modelsNote2?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text(it, fontSize = 11.sp, color = if (it.startsWith("拉取失败")) palette.bad else palette.ok)
+                }
+                if (models2At > 0L) {
+                    Spacer(Modifier.height(2.dp))
+                    Text("上次拉取 ${formatTime(models2At)}（存在本机）", fontSize = 10.sp, color = palette.sub)
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "拉取用的是第二套自己的地址 / Key；这两格也留空的话，就跟第一套一模一样。",
+                    fontSize = 10.sp,
+                    color = palette.sub,
                 )
                 Spacer(Modifier.height(8.dp))
                 GlassPill("同上（三格都清空 = 复用第一套）", false, Modifier.fillMaxWidth()) {

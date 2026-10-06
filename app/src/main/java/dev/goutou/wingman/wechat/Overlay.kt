@@ -841,7 +841,11 @@ internal class Panel(private val a: Activity) {
                 if (cfg.graded) {
                     val out = Graded.run(
                         replyClient = LlmClient(cfg, onTrace = { traces.add("【写回复一路】\n$it") }),
-                        riskClient = LlmClient(cfg.riskEndpoint(), onTrace = { traces.add("【风险评估一路】\n$it") }),
+                        riskClient = LlmClient(
+                            cfg.riskEndpoint(),
+                            onTrace = { traces.add("【风险评估一路】\n$it") },
+                            second = true,
+                        ),
                         skillPrompt = cfg.prompt,
                         msgs = msgs,
                         roleContext = roleContext,
