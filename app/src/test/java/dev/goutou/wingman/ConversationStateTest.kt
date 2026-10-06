@@ -7,11 +7,12 @@ import org.junit.Test
 class ConversationStateTest {
     private val messages = listOf(ChatMsg(false, "好的"))
 
-    @Test fun `transient empty title keeps the active conversation`() {
-        assertEquals("张三", stableConversationName("张三", ""))
-        assertEquals("张三", stableConversationName("张三", "  "))
-        assertEquals("李四", stableConversationName("张三", "李四"))
-        assertEquals("", stableConversationName("", ""))
+    @Test fun `role context is usable when profile or history has content`() {
+        assertTrue(hasUsableRoleContext("同事", "", 0))
+        assertTrue(hasUsableRoleContext("", "备注", 0))
+        assertTrue(hasUsableRoleContext("", "", 1))
+        assertFalse(hasUsableRoleContext("", "  ", 0))
+        assertFalse(hasUsableRoleContext("", "", -1))
     }
 
     @Test fun `same message in different conversations has separate replies and records`() {
