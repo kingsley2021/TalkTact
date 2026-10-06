@@ -26,15 +26,20 @@ class ChatParser(
             val who = if (fromMe) "" else nickname(row, bubble)
 
             val raw = bubble.text
-            if (raw == null) {
-                // 图片消息：问一句「这张图认出来什么字」。认字这件事本身在 App 进程里做，
-                // 这里拿到的可能是什么都没有 —— 那就还是老占位，行为和没这个功能时一模一样。
+            // 附件行 = 「一个字都没有」或者微信给的通用占位（[图片] 这种，无障碍描述里也会有）。
+            // 问一句「这张图认出来什么字」——认字本身在 App 进程里做，这里可能什么都拿不到。
+            if (raw == null || isGenericAttachment(raw)) {
                 val ocr = row.image?.let { runCatching { imageText(it) }.getOrNull() }
-                val text = imageMessageText(ocr, maxTextLen)
-                // 认到字的当**真消息**（进上下文、也进角色记录）；没认到的仍是「内容未知」的占位
-                add(out, ChatMsg(fromMe, text, who, attachment = text == ATTACHMENT_TEXT))
-                continue
+                // 认出字了就换成它；没认出来时，原文本来就是 [图片] 这种占位的就照旧用原文
+                // （不能把 [图片] 换成我们更笼统的占位 —— 那是信息倒退）
+                if (raw == null || !ocr.isNullOrBlank()) {
+                    val text = imageMessageText(ocr, maxTextLen)
+                    // 认到字的当**真消息**（进上下文、也进角色记录）；没认到的仍是「内容未知」的占位
+                    add(out, ChatMsg(fromMe, text, who, attachment = text == ATTACHMENT_TEXT))
+                    continue
+                }
             }
+            if (raw == null) continue
             val text = clean(raw)
             if (text.isEmpty() || text.length > maxTextLen) continue
             if (Chrome.isChrome(text)) continue

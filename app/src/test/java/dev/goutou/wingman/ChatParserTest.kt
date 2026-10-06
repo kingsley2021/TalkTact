@@ -170,4 +170,32 @@ class ChatParserTest {
         assertEquals("[图片] ".length + 401, msgs[0].text.length)
         assertFalse(msgs[0].attachment)
     }
+
+    @Test
+    fun `通用占位也会拿图里的字把它换掉`() {
+        // 微信（无障碍描述里）给的 [图片] 也是「没文字」，认出字就该换掉 —— 模型才知道图里写了什么
+        val msgs = parser.parse(
+            listOf(row("[图片]", 300, Side.OTHER, 0.35, false, image = img())),
+        ) { "今晚八点老地方" }
+        assertEquals(1, msgs.size)
+        assertEquals("[图片] 今晚八点老地方", msgs[0].text)
+        assertFalse(msgs[0].attachment)
+    }
+
+    @Test
+    fun `占位行没认出字就照旧用原文`() {
+        // 不能把 [图片] 换成更笼统的 [图片/表情/语音] —— 那是信息倒退
+        val msgs = parser.parse(listOf(row("[图片]", 300, Side.OTHER, 0.35, false, image = img())))
+        assertEquals("[图片]", msgs[0].text)
+        assertFalse(msgs[0].attachment)
+    }
+
+    @Test
+    fun `具体表情名不会被当成图片消息`() {
+        // [微笑] 这种本来就是有内容的文字消息，不该被重写
+        val msgs = parser.parse(
+            listOf(row("[微笑]", 300, Side.OTHER, 0.35, false, image = img())),
+        ) { "不该被用上" }
+        assertEquals("[微笑]", msgs[0].text)
+    }
 }

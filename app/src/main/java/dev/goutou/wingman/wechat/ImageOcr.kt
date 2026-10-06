@@ -100,8 +100,16 @@ internal class ImageOcr {
 
         val now = System.currentTimeMillis()
         var pending = false
+        var sawImage = false
+        var probe: String? = null
         for (row in rows) {
-            val img = row.image ?: continue
+            val img = row.image
+            if (img == null) {
+                // 「像附件的一行却找不到图」——把现场留下（只记第一条，状态行就那么长）
+                if (row.imageProbe != null && probe == null) probe = row.imageProbe
+                continue
+            }
+            sawImage = true
 
             val bytes = img.jpeg(ProxyProtocol.OCR_MAX_SIDE)
             if (bytes == null || bytes.isEmpty()) {
@@ -127,6 +135,12 @@ internal class ImageOcr {
             pending = true
             submit(key, bytes, cfg)
         }
+
+        // 这一屏连一张图都没找到，但确实有像附件的行 —— 直接把看到的现场写出来。
+        // 真机上「图上有字却一个字都没认」全靠这一句分辨：是没找到图，还是找到了认不出字。
+        if (!pending && !sawImage && probe != null) {
+            line = "这一屏没找到能认的图（$probe）"
+        }
         pending
     }
 
@@ -139,6 +153,12 @@ internal class ImageOcr {
     fun textOf(img: RowImage): String? = synchronized(this) {
         val key = keysOfTick[img] ?: return null
         done[key]?.ifEmpty { null }
+    }
+
+    /** 诊断用的一句话：认过几张、正在认几张、冷却几张、最近一次是什么。 */
+    fun debugLine(): String = synchronized(this) {
+        "已认=${done.size} 正在认=${inFlight.size} 冷却中=${failed.size} 本轮候选=${keysOfTick.size}" +
+            "｜最近=" + (line ?: "（还没有记录）")
     }
 
     private fun submit(key: String, bytes: ByteArray, cfg: ConfigData) {

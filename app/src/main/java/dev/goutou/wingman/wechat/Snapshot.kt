@@ -52,6 +52,13 @@ data class RowSnapshot(
      * 而取字节要碰 Android API，所以做成回调 —— 快照这一层仍然是纯数据，单测照样能造。
      */
     val image: RowImage? = null,
+    /**
+     * 这一行「找图」的现场（只在像附件的行上填），例如 `候选 2｜最大 MMImageView 640x480`。
+     *
+     * 为什么要带着它：真机上「图上有字、却一个字都没认出来」没法调试（改一次要发版）。
+     * 把看到的东西带回 App 显示出来，就能一眼分辨是「这行压根没找到图」还是「找到了但认不出字」。
+     */
+    val imageProbe: String? = null,
 )
 
 /**
@@ -80,6 +87,19 @@ data class ChatMsg(
 )
 
 const val ATTACHMENT_TEXT = "[图片/表情/语音]"
+
+/**
+ * 微信给「没有文字的附件」用的**通用占位**（无障碍描述里也会出现这几个）。
+ *
+ * 刻意**不含**具体表情名（`[微笑]` 这种）：那种行本来就是有内容的文字消息，
+ * 不该被当成「图片消息」重写一遍。
+ */
+private val GENERIC_ATTACHMENT = setOf(
+    "[图片]", "[照片]", "[表情]", "[动画表情]", "[语音]", "[视频]", "[文件]", "[链接]", "[位置]", ATTACHMENT_TEXT,
+)
+
+/** 这一行是不是「通用附件占位」——凡是这种行，都可以拿图里的字把它换掉。 */
+fun isGenericAttachment(t: String): Boolean = t.trim() in GENERIC_ATTACHMENT
 
 /** 认出来的图片文字写进上下文时的前缀（模型靠它知道「这是从图里认出来的，可能有错字」）。 */
 const val IMAGE_PREFIX = "[图片] "

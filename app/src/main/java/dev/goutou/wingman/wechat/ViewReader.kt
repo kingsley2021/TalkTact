@@ -517,77 +517,147 @@ internal class ViewReader(private val a: Activity) {
             }
         }
 
-        // 只有「这一行没有正文」时才去找图：有文字的行不用管图。
+        // 只有「像附件的一行」才去找图（有正文的行不用管图），顺手记下现场。
         // 找不到就照旧 null —— 没有这一步时是什么样，现在还是什么样。
-        val image = if (bubble?.text == null) {
-            messageImage(row)?.let { hit -> RowImage(hit.w, hit.h) { side -> jpegOf(hit.view, side) } }
+        val scan = if (bubble?.text == null || isGenericAttachment(bubble.text.orEmpty())) {
+            scanImage(row)
         } else {
             null
         }
+        val image = scan?.hit?.let { hit -> RowImage(hit.w, hit.h) { side -> jpegOf(hit, side) } }
 
-        return RowSnapshot(bubble, texts, avatars, image)
+        return RowSnapshot(bubble, texts, avatars, image, scan?.probe)
     }
 
-    /** 找到的「消息图」：控件本体 + 它在屏幕上的尺寸（尺寸只用来写诊断）。 */
-    private class ImgTarget(val view: ImageView, val w: Int, val h: Int)
+    /** 一次「找图」的结果：命中的控件 + 一句话现场（诊断用）。 */
+    private class ImgScan(val hit: ImgHit?, val probe: String)
+
+    /** 一个候选控件：尺寸、嵌套深度、取像素的方式、一句描述。 */
+    private class ImgHit(
+        val view: View,
+        val w: Int,
+        val h: Int,
+        val depth: Int,
+        /** true = 只能靠 view.draw() 画出来（不是 ImageView，或者它的 drawable 不是位图） */
+        val viaDraw: Boolean,
+        val kind: String,
+    )
 
     /**
-     * 一行里那张「消息图」。
+     * 在一行里找那张「消息图」，顺便给出一句「看到了什么」。
      *
-     * 判据：**最大**的那个 ImageView，且短边 > 84dp。
-     * 为什么用尺寸而不是类名：微信的图片控件类名跨版本会变，而「比表情/头像大得多」这件事很稳定 ——
-     * 头像（24~84dp 的方形）已经在 [readRow] 里被排除了，表情 / 贴纸也都是方方正正的小图，
-     * 真正的照片和聊天截图都远大于这个尺寸。
+     * 判据只有尺寸，不认类名（微信一改版本类名就变）：**短边 > 84dp、面积 ≥ 这一行的 40%、
+     * 且不是文字控件**。头像（24~84dp 的方形）在这条线以下，表情 / 贴纸一般也是小图，
+     * 而照片和聊天截图都远大于它。
      *
-     * 认错了也不要紧：认不出字就回落成 `[图片]` 占位（见 [imageMessageText]），
-     * 顶多多花一次识别时间，不会让分析出错。
+     * 取像素分两档：
+     * 1. ImageView + BitmapDrawable → 直接拿原始位图（最清楚、也最省）；
+     * 2. 其他大控件 → `view.draw()` 画进一张位图。
+     *    第 2 档是**兜底**：微信 8.0.78 的正文大量是自绘的（正文文字就是这样），
+     *    图片不一定老实待在 ImageView 里 —— 真机反馈「图上有字却一个字都没认」，
+     *    最可能就是第 1 档没命中。画出来的只有屏幕上那点像素、会糊一些，但比什么都没有强。
+     *
+     * 挑哪个：**叶子优先**（图本身就是叶子），一个叶子都没有才退到「最深的大容器」——
+     * 容器链（行 → 气泡 → 图片）里，最深那个才是内容本身。
      */
-    private fun messageImage(row: View): ImgTarget? {
-        var best: ImgTarget? = null
-        walk(row, includeInvisible = false) { v ->
-            if (v !is ImageView) return@walk
+    private fun scanImage(row: View): ImgScan {
+        val rowW = if (row.width > 0) row.width else row.measuredWidth
+        val rowH = if (row.height > 0) row.height else row.measuredHeight
+        val rowArea = (rowW * rowH).coerceAtLeast(1)
+        val minSide = dp(84)
+        val hits = ArrayList<ImgHit>(4)
+        var biggest: ImgHit? = null
+
+        fun visit(v: View, depth: Int) {
             val w = if (v.width > 0) v.width else v.measuredWidth
             val h = if (v.height > 0) v.height else v.measuredHeight
-            if (w <= 0 || h <= 0) return@walk
-            if (minOf(w, h) <= dp(84)) return@walk                    // 头像 / 表情 / 角标，不是消息图
-            val cur = best
-            if (cur != null && w * h <= cur.w * cur.h) return@walk     // 已经有更大的了
-            val bmp = (v.drawable as? BitmapDrawable)?.bitmap ?: return@walk
-            if (bmp.isRecycled) return@walk
-            best = ImgTarget(v, w, h)
+            val big = w > 0 && h > 0 && minOf(w, h) > minSide && w * h >= rowArea * 2 / 5
+            if (big && v !is TextView && v !is EditText && v.isShown) {
+                val iv = v as? ImageView
+                val bmp = (iv?.drawable as? BitmapDrawable)?.bitmap?.takeIf { !it.isRecycled }
+                val hit = ImgHit(
+                    view = v,
+                    w = w,
+                    h = h,
+                    depth = depth,
+                    viaDraw = bmp == null,
+                    kind = v.javaClass.simpleName + when {
+                        bmp != null -> "（位图 ${bmp.width}x${bmp.height}）"
+                        iv != null -> "（drawable=${iv.drawable?.javaClass?.simpleName ?: "null"}）"
+                        else -> "（自绘）"
+                    },
+                )
+                hits.add(hit)
+                val cur = biggest
+                if (cur == null || w * h > cur.w * cur.h) biggest = hit
+            }
+            if (v is ViewGroup) for (i in 0 until v.childCount) visit(v.getChildAt(i), depth + 1)
         }
-        return best
+        visit(row, 0)
+
+        val hit = hits.filter { it.view !is ViewGroup }.maxByOrNull { it.w * it.h }
+            ?: hits.filter { it.view !== row }.maxByOrNull { it.depth * 10_000_000 + it.w * it.h }
+
+        val top = biggest
+        val probe = if (top == null) {
+            "候选 0（行内没有短边 >84dp 的非文字控件）"
+        } else {
+            "候选 ${hits.size}｜最大 ${top.kind} ${top.w}x${top.h}"
+        }
+        return ImgScan(hit, probe)
     }
 
-    /**
-     * 把消息图压成可以走回环的 JPEG。
-     *
-     * 先等比缩到最长边 [maxSide]，再按 q82 编码 —— 一张聊天截图通常能压到几百 KB，
-     * 而识别精度几乎不受影响（ML Kit 自己也会再缩一次）。
-     * **绝不回收原图**（那张位图是微信的，我们只是读一下），只回收自己缩出来的那份。
-     */
-    private fun jpegOf(iv: ImageView, maxSide: Int): ByteArray? {
-        val src = (iv.drawable as? BitmapDrawable)?.bitmap ?: return null
-        if (src.isRecycled || src.width <= 0 || src.height <= 0) return null
-        val longest = maxOf(src.width, src.height)
-        val scaled = if (maxSide > 0 && longest > maxSide) {
-            val k = maxSide.toFloat() / longest
-            runCatching {
-                Bitmap.createScaledBitmap(
-                    src,
-                    (src.width * k).toInt().coerceAtLeast(1),
-                    (src.height * k).toInt().coerceAtLeast(1),
-                    true,
-                )
-            }.getOrNull() ?: return null
+    /** 把命中的控件变成一份 JPEG（长边缩到 [maxSide]）。null = 这一张取不到。 */
+    private fun jpegOf(hit: ImgHit, maxSide: Int): ByteArray? {
+        // ① 原始位图：ImageView 且 drawable 就是位图
+        val raw = if (hit.viaDraw) {
+            null
         } else {
-            src
+            (hit.view as? ImageView)?.drawable?.let { (it as? BitmapDrawable)?.bitmap }
         }
+        val bitmap: Bitmap = if (raw != null && !raw.isRecycled && raw.width > 0 && raw.height > 0) {
+            val k = scaleFactor(maxOf(raw.width, raw.height), maxSide)
+            if (k >= 1f) raw else scaleBitmap(raw, k) ?: return null
+        } else {
+            // ② 自绘控件：只能画出来（必须在主线程）
+            drawView(hit, maxSide) ?: return null
+        }
+        val own = if (bitmap === raw) null else bitmap
         val out = java.io.ByteArrayOutputStream()
-        val ok = runCatching { scaled.compress(Bitmap.CompressFormat.JPEG, 82, out) }.getOrDefault(false)
-        if (scaled !== src) runCatching { scaled.recycle() }
+        val ok = runCatching { bitmap.compress(Bitmap.CompressFormat.JPEG, 82, out) }.getOrDefault(false)
+        // 只回收自己造的那一份；原始位图是微信的，绝不能碰
+        own?.let { runCatching { it.recycle() } }
         return if (ok) out.toByteArray() else null
     }
+
+    private fun scaleFactor(longest: Int, maxSide: Int): Float =
+        if (maxSide > 0 && longest > maxSide) maxSide.toFloat() / longest else 1f
+
+    private fun scaleBitmap(src: Bitmap, k: Float): Bitmap? = runCatching {
+        Bitmap.createScaledBitmap(
+            src,
+            (src.width * k).toInt().coerceAtLeast(1),
+            (src.height * k).toInt().coerceAtLeast(1),
+            true,
+        )
+    }.getOrNull()
+
+    /**
+     * 把一个自绘控件画进位图。
+     *
+     * ⚠️ **必须在主线程**（`View.draw` 不是线程安全的）。按目标尺寸建位图再 `canvas.scale`，
+     * 省掉「先全尺寸画一遍、再缩一次」的那次内存峰值。
+     */
+    private fun drawView(hit: ImgHit, maxSide: Int): Bitmap? = runCatching {
+        val k = scaleFactor(maxOf(hit.w, hit.h), maxSide)
+        val w = (hit.w * k).toInt().coerceAtLeast(1)
+        val h = (hit.h * k).toInt().coerceAtLeast(1)
+        Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bmp ->
+            val canvas = Canvas(bmp)
+            canvas.scale(k, k)
+            hit.view.draw(canvas)
+        }
+    }.getOrNull()
 
     /**
      * 反射兜底取正文。

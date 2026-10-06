@@ -740,8 +740,9 @@ internal class Panel(private val a: Activity) {
     private fun stateReport(list: ViewGroup?): String = try {
         val cfg = config
         val decor = a.window?.decorView
-        val msgs = list?.let {
-            runCatching { parser.parse(reader.snapshot(it)).takeLast(cfg?.ctx ?: 8) }.getOrNull()
+        val rows = list?.let { runCatching { reader.snapshot(it) }.getOrNull() }
+        val msgs = rows?.let {
+            runCatching { parser.parse(it).takeLast(cfg?.ctx ?: 8) }.getOrNull()
         }
         buildString {
             append("—— 面板状态 ——\n")
@@ -754,6 +755,9 @@ internal class Panel(private val a: Activity) {
             append("noListTicks=$noListTicks emptyNotified=$emptyNotified\n")
             append("距上次调用=${System.currentTimeMillis() - lastCallAt}ms（最短间隔 ${cfg?.minIntervalSec}s）\n")
             append("cfg: enabled=${cfg?.enabled} skill=${cfg?.skillId} prompt=${cfg?.prompt?.length}字 ctx=${cfg?.ctx}\n")
+            // 图片识别状态 + 每一行「找图」的现场：排查「图上有字却没认出来」就看这两行
+            append("识图：" + ocr.debugLine() + "\n")
+            rows?.mapNotNull { it.imageProbe }?.take(2)?.forEach { append("行内找图：$it\n") }
             if (msgs == null) {
                 append("解析：列表为空，没跑\n")
             } else {

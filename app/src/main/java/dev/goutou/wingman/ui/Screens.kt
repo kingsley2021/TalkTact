@@ -50,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -67,6 +68,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.unit.sp
 import android.Manifest
 import android.content.Context
@@ -1217,8 +1220,15 @@ fun AdvancedScreen(
     // （去微信转一圈再回来，看到的就是刚回传的那份。）
     // 这里的第三项是「图片识别」的最近一次结果 —— 它同样是注入侧广播回传的，
     // 借同一次轮询一起读，省掉第二个定时器。
+    //
+    // ⚠️ 轮询是**有上限**的（下面 repeat(200)，约 5 分钟）。而典型用法恰好是
+    // 「打开这一页看一眼 → 去微信里试 → 切回来」，那往往已经超过 5 分钟了 ——
+    // 于是页面还停在旧值上（真机反馈过「明明认了字，App 里还是『还没试过』」就是这个）。
+    // 所以每次回到前台（ON_RESUME）都重启一轮。
+    val resumed = resumedTick()
     val pulled by produceState(
         initialValue = Triple(store.chatCandidates(), store.chatPullInfo(), store.ocrInfo()),
+        key1 = resumed,
     ) {
         // 轮询**有上限**（约 5 分钟）：一个是别让这个页面永远挂着定时任务，
         // 另一个是单元测试里跑渲染回归时，无限循环的协程可能把测试挂住 —— 有界就没有这种风险。
@@ -2030,7 +2040,11 @@ fun ChatCandidatesScreen(
     // 候选是注入侧用广播回传的，这一页不会自己重组 —— 停在这里时每 1.5 秒自己看一眼。
     // 轮询**有上限**（约 5 分钟），理由和白名单卡那边一样：别留一个永远挂着的定时任务，
     // 也让渲染回归测试不会被一个无限协程挂住。
-    val pulled by produceState(initialValue = store.chatCandidates() to store.chatPullInfo()) {
+    val resumed = resumedTick()
+    val pulled by produceState(
+        initialValue = store.chatCandidates() to store.chatPullInfo(),
+        key1 = resumed,
+    ) {
         repeat(200) {
             kotlinx.coroutines.delay(1500)
             value = store.chatCandidates() to store.chatPullInfo()
@@ -3022,6 +3036,21 @@ private fun buildDiagZip(context: Context, store: ConfigStore, cfg: ConfigData):
             "06-用量.txt" to "调用次数：$calls\n累计 token：$tokens\n",
         ),
     )
+}
+
+/**
+ * 「回到前台」的信号：每次 ON_RESUME 自增，给 [produceState] 当重启键。
+ *
+ * 为什么需要：页面上的那些「注入侧广播回传」的状态（会话名候选、识图结果）都是靠
+ * **有上限的轮询**刷新的（5 分钟就停了）。而典型用法是「打开看一眼 → 去微信里试 → 切回来」，
+ * 那时候轮询早就停了，页面会一直显示旧值 —— 真机反馈过
+ * 「微信里明明认了字，App 里还是『还没试过』」，就是它。
+ */
+@Composable
+private fun resumedTick(): Int {
+    var tick by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { tick++ }
+    return tick
 }
 
 /**
