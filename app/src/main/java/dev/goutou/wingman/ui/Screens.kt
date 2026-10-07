@@ -496,7 +496,7 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                     value = withContext(Dispatchers.IO) { NetInfo.resolve(host) }
                 }
                 // 归属地：要问第三方，拿不到就 null（缓存 10 分钟；点「开始自检」会强制重查）。
-                // 关掉开关就一次都不问；地址也能换成自己的（见「高级设置 → 网络信息」）。
+                // 关掉开关就一次都不问；地址也能换成自己的（见「高级设置 → 诊断 → 网络信息」）。
                 val geoUrl = remember(cfg.geoEndpoint) { cfg.geoEndpoint.trim().ifBlank { NetInfo.GEO_ENDPOINT } }
                 val localGeo by produceState<Geo?>(null, tick, cfg.geoEnabled, geoUrl) {
                     value = if (!cfg.geoEnabled) null
@@ -517,8 +517,8 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                 NetRow("目标服务器", joinInfo(targetIp, targetGeo?.province ?: targetGeo?.country), host)
                 Spacer(Modifier.height(4.dp))
                 HintText(
-                    if (!cfg.geoEnabled) "归属地查询已在「高级设置 → 网络信息」里关掉（IP 仍然只在本机解析）。"
-                    else "省份来自第三方 IP 库，仅供参考；取不到就显示 null。可在「高级设置 → 网络信息」里关掉或换接口。",
+                    if (!cfg.geoEnabled) "归属地查询已在「高级设置 → 诊断 → 网络信息」里关掉（IP 仍然只在本机解析）。"
+                    else "省份来自第三方 IP 库，仅供参考；取不到就显示 null。可在「高级设置 → 诊断 → 网络信息」里关掉或换接口。",
                     fontSize = 10.sp,
                     color = palette.sub,
                 )
@@ -1188,6 +1188,26 @@ fun SettingsScreen(
 // ================= 高级设置（设置 → 二级页） =================
 
 /**
+ * 高级设置的分组标题：12sp、次级色、上面留 24dp 的呼吸位。
+ *
+ * 九张卡平铺时是一串并列名词，扫视没有动线；加上「接入 / 生成 / 识别 / 微信内 / 维护与排障」
+ * 之后，看到的是五个词而不是九个名词，也更不容易把「要配的」和「排障用的」混在一起。
+ * 左对齐到卡片外沿再往右 4dp，跟卡内文字错开半格 —— 看起来是「标题」而不是「正文」。
+ */
+@Composable
+private fun GroupTitle(text: String) {
+    val palette = LocalPalette.current
+    Text(
+        text,
+        modifier = Modifier.padding(start = 18.dp, top = 18.dp, bottom = 3.dp),
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+        color = palette.sub.copy(alpha = 0.75f),
+        letterSpacing = 0.8.sp,
+    )
+}
+
+/**
  * 设置 → 高级设置。
  *
  * 从设置首页搬过来的四块：接口地址、微信内自动分析（含敏感检查）、备份 / 迁移、诊断入口。
@@ -1278,18 +1298,6 @@ fun AdvancedScreen(
             }
             if (second) pulling2 = false else pulling = false
         }
-    }
-
-    /**
-     * 归属地的开关 / 地址：**立刻落盘**（跟白名单 / 识图 / 生成模式同一个道理）。
-     * 开关切换时会把当前地址草稿一起存下来 —— 免得「刚改完地址就切开关」把它弄丢。
-     */
-    fun saveGeoNow(enabled: Boolean, endpoint: String) {
-        store.saveGeo(enabled, endpoint)
-        val fresh = store.load()
-        d = d.copy(geoEnabled = fresh.geoEnabled, geoEndpoint = fresh.geoEndpoint)
-        persisted = fresh
-        onSaved()
     }
 
     /**
@@ -1451,6 +1459,8 @@ fun AdvancedScreen(
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
             )
         }
+
+        GroupTitle("接入")
 
         GlassCard(d.glassAlpha) {
             // 公告栏放最上面：换接口/换模型最该先知道的就是「这俩大概要等多久」
@@ -1724,54 +1734,7 @@ fun AdvancedScreen(
             }
         }
 
-        GlassCard(d.glassAlpha) {
-            Text("图片文字识别（OCR）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
-            Text(
-                "聊天里的图片会先在这台手机上认成文字，再和别的消息一起交给模型 —— " +
-                    "截图、长图里的话也能被读懂。\n" +
-                    "认字完全离线：内置的中文模型，不联网、不下载、不需要 Play 服务，图片也不会上传" +
-                    "（只在本机两个进程之间走一趟）。代价是这个安装包大了十几 MB。",
-                fontSize = 11.sp,
-                color = palette.sub,
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("识别聊天里的图片", fontSize = 15.sp, color = palette.text)
-                    Text(
-                        if (d.ocrEnabled) {
-                            "开着：每轮分析前，屏幕上的图会先认一遍字"
-                        } else {
-                            "关着：图片还是老样子 —— 用 [图片/表情/语音] 占位"
-                        },
-                        fontSize = 11.sp,
-                        color = palette.sub,
-                    )
-                }
-                Switch(
-                    checked = d.ocrEnabled,
-                    onCheckedChange = { on ->
-                        saveOcr(on)
-                        ocrNote = if (on) "已开 · 微信里下次识别生效" else "已关 · 图片回落成占位"
-                    },
-                )
-            }
-            if (d.ocrEnabled && !d.proxyEnabled) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "⚠ 还差一步：认字这件事在 App 进程里做，所以得先把上面那张卡的「本地代理」打开 —— " +
-                        "否则微信那边连不上本机端口，会直接跳过（图片仍是占位）。",
-                    fontSize = 11.sp,
-                    color = palette.warn,
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Text("最近一次：$ocrStatus", fontSize = 11.sp, color = palette.sub)
-            ocrNote?.let {
-                Spacer(Modifier.height(4.dp))
-                Text(it, fontSize = 11.sp, color = palette.ok)
-            }
-        }
+        GroupTitle("生成")
 
         GlassCard(d.glassAlpha) {
             Text("生成模式", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
@@ -1881,6 +1844,59 @@ fun AdvancedScreen(
                 )
             }
         }
+
+        GroupTitle("识别")
+
+        GlassCard(d.glassAlpha) {
+            Text("图片文字识别（OCR）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text(
+                "聊天里的图片会先在这台手机上认成文字，再和别的消息一起交给模型 —— " +
+                    "截图、长图里的话也能被读懂。\n" +
+                    "认字完全离线：内置的中文模型，不联网、不下载、不需要 Play 服务，图片也不会上传" +
+                    "（只在本机两个进程之间走一趟）。代价是这个安装包大了十几 MB。",
+                fontSize = 11.sp,
+                color = palette.sub,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("识别聊天里的图片", fontSize = 15.sp, color = palette.text)
+                    Text(
+                        if (d.ocrEnabled) {
+                            "开着：每轮分析前，屏幕上的图会先认一遍字"
+                        } else {
+                            "关着：图片还是老样子 —— 用 [图片/表情/语音] 占位"
+                        },
+                        fontSize = 11.sp,
+                        color = palette.sub,
+                    )
+                }
+                Switch(
+                    checked = d.ocrEnabled,
+                    onCheckedChange = { on ->
+                        saveOcr(on)
+                        ocrNote = if (on) "已开 · 微信里下次识别生效" else "已关 · 图片回落成占位"
+                    },
+                )
+            }
+            if (d.ocrEnabled && !d.proxyEnabled) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "⚠ 还差一步：认字这件事在 App 进程里做，所以得先把上面那张卡的「本地代理」打开 —— " +
+                        "否则微信那边连不上本机端口，会直接跳过（图片仍是占位）。",
+                    fontSize = 11.sp,
+                    color = palette.warn,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("最近一次：$ocrStatus", fontSize = 11.sp, color = palette.sub)
+            ocrNote?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, fontSize = 11.sp, color = palette.ok)
+            }
+        }
+
+        GroupTitle("微信内")
 
         GlassCard(d.glassAlpha) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2196,54 +2212,7 @@ fun AdvancedScreen(
             }
         }
 
-        GlassCard(d.glassAlpha) {
-            Text("网络信息（归属地）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
-            Text(
-                "「运行状态 → 接口自检」里那两行省份，是拿 IP 去问第三方库要的 —— 这是整个模块唯一一处" +
-                    "会把 IP 发给别人的地方。关掉之后自检只显示 IP，一次都不问。",
-                fontSize = 11.sp,
-                color = palette.sub,
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("查询 IP 归属地", fontSize = 15.sp, color = palette.text)
-                    Text(
-                        if (d.geoEnabled) "自检时带上省份（结果缓存 10 分钟）" else "已关闭：不请求任何第三方",
-                        fontSize = 11.sp,
-                        color = palette.sub,
-                    )
-                }
-                Switch(checked = d.geoEnabled, onCheckedChange = { saveGeoNow(it, d.geoEndpoint) })
-            }
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = d.geoEndpoint,
-                onValueChange = { update(d.copy(geoEndpoint = it)) },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("自定义接口地址（留空 = 用内置的）") },
-                singleLine = true,
-                enabled = d.geoEnabled,
-            )
-            if (d.geoEnabled && d.geoEndpoint.trim() != persisted.geoEndpoint.trim()) {
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("地址还没保存", modifier = Modifier.weight(1f), fontSize = 11.sp, color = palette.bad)
-                    Button(
-                        onClick = { saveGeoNow(d.geoEnabled, d.geoEndpoint) },
-                        modifier = Modifier.height(42.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-                    ) { Text("保存地址") }
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            HintText(
-                "自己填的地址要能返回 JSON（内置用的是 ip.useragentinfo.com）；认不出的字段一律当没有，不会报错。",
-                fontSize = 10.sp,
-                color = palette.sub,
-            )
-        }
+        GroupTitle("维护与排障")
 
         GlassCard(d.glassAlpha) {
             Text("备份 / 迁移", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
@@ -2602,6 +2571,77 @@ fun ChatCandidatesScreen(
 // ================= 诊断（设置 → 高级设置 → 诊断） =================
 
 /**
+ * 网络信息（归属地）—— 从「高级设置」沉到「诊断」页顶部。
+ *
+ * 它是只读的排障信息（自检里那两行省份是从哪儿来的），本质属于网络排障，和接口地址那种
+ * 「要你去配的」不是一类东西；放在九张配置卡中间，它是唯一一张「看一眼就行」的卡。
+ *
+ * 开关与自定义地址都**立刻落盘**（跟白名单 / 识图 / 生成模式同一个道理），没有「保存」按钮 ——
+ * 所以这里自己读一份 store，不依赖外面那页的草稿（诊断页本来也没有草稿）。
+ */
+@Composable
+private fun GeoCard(store: ConfigStore, glassAlpha: Float) {
+    val palette = LocalPalette.current
+    var d by remember { mutableStateOf(store.load()) }
+    var persisted by remember { mutableStateOf(d) }
+
+    fun saveGeoNow(enabled: Boolean, endpoint: String) {
+        store.saveGeo(enabled, endpoint)
+        d = store.load()
+        persisted = d
+    }
+
+    GlassCard(glassAlpha) {
+        Text("网络信息（归属地）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+        Text(
+            "「运行状态 → 接口自检」里那两行省份，是拿 IP 去问第三方库要的 —— 这是整个模块唯一一处" +
+                "会把 IP 发给别人的地方。关掉之后自检只显示 IP，一次都不问。",
+            fontSize = 11.sp,
+            color = palette.sub,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("查询 IP 归属地", fontSize = 15.sp, color = palette.text)
+                Text(
+                    if (d.geoEnabled) "自检时带上省份（结果缓存 10 分钟）" else "已关闭：不请求任何第三方",
+                    fontSize = 11.sp,
+                    color = palette.sub,
+                )
+            }
+            Switch(checked = d.geoEnabled, onCheckedChange = { saveGeoNow(it, d.geoEndpoint) })
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = d.geoEndpoint,
+            onValueChange = { d = d.copy(geoEndpoint = it) },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("自定义接口地址（留空 = 用内置的）") },
+            singleLine = true,
+            enabled = d.geoEnabled,
+        )
+        if (d.geoEnabled && d.geoEndpoint.trim() != persisted.geoEndpoint.trim()) {
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("地址还没保存", modifier = Modifier.weight(1f), fontSize = 11.sp, color = palette.bad)
+                Button(
+                    onClick = { saveGeoNow(d.geoEnabled, d.geoEndpoint) },
+                    modifier = Modifier.height(42.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                ) { Text("保存地址") }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        HintText(
+            "自己填的地址要能返回 JSON（内置用的是 ip.useragentinfo.com）；认不出的字段一律当没有，不会报错。",
+            fontSize = 10.sp,
+            color = palette.sub,
+        )
+    }
+}
+
+/**
  * 设置 → 高级设置 → 诊断（第三层）。
  *
  * 这三块原来是挤在「运行状态」页上的（抓取界面 / 微信进程的诊断 / 最后一次调用），
@@ -2627,6 +2667,9 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
             Spacer(Modifier.width(8.dp))
             HeaderButton("← 返回", onBack)
         }
+
+        // 归属地从「高级设置」沉到这里：只读的排障信息，跟「要配的」分开。
+        GeoCard(store, glassAlpha)
 
         GlassCard(glassAlpha) {
             Text("抓取微信界面", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
