@@ -69,7 +69,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.unit.sp
@@ -165,6 +167,49 @@ private fun FoldCard(
         }
     }
 }
+
+/**
+ * 长说明的折叠显示 —— 只做呈现，不参与任何逻辑。
+ *
+ * 默认最多显示 [collapsedLines] 行；**只有真的被截断**（hasVisualOverflow）
+ * 才在下面给一个「展开 / 收起」。短文案不会多出任何按钮，
+ * 所以调大调小 [collapsedLines] 只影响观感，不影响功能。
+ */
+@Composable
+private fun HintText(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+    fontSize: TextUnit = 11.sp,
+    collapsedLines: Int = 2,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var overflowed by remember { mutableStateOf(false) }
+    Column(modifier) {
+        Text(
+            text = text,
+            fontSize = fontSize,
+            color = color,
+            maxLines = if (expanded) Int.MAX_VALUE else collapsedLines,
+            overflow = TextOverflow.Ellipsis,
+            onTextLayout = { result -> if (!expanded) overflowed = result.hasVisualOverflow },
+        )
+        if (overflowed) {
+            Text(
+                text = if (expanded) "收起" else "展开",
+                fontSize = fontSize,
+                fontWeight = FontWeight.Medium,
+                color = LocalPalette.current.primary,
+                modifier = Modifier
+                    .padding(top = 3.dp)
+                    .clickable(onClickLabel = if (expanded) "收起这段说明" else "展开这段说明") {
+                        expanded = !expanded
+                    },
+            )
+        }
+    }
+}
+
 
 /** 一行「标题 + 值」的网络信息。值取不到就显示 null —— 不编。 */
 @Composable
@@ -471,7 +516,7 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                 )
                 NetRow("目标服务器", joinInfo(targetIp, targetGeo?.province ?: targetGeo?.country), host)
                 Spacer(Modifier.height(4.dp))
-                Text(
+                HintText(
                     if (!cfg.geoEnabled) "归属地查询已在「高级设置 → 网络信息」里关掉（IP 仍然只在本机解析）。"
                     else "省份来自第三方 IP 库，仅供参考；取不到就显示 null。可在「高级设置 → 网络信息」里关掉或换接口。",
                     fontSize = 10.sp,
@@ -869,7 +914,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                 glassAlpha = glassAlpha,
                 onToggle = { importOpen = !importOpen },
             ) {
-                Text(
+                HintText(
                     "粘 SKILL.md 的地址即可（网页地址也行，会自动换成 raw 直链）。导入时会自动补齐 JSON 输出契约。",
                     fontSize = 12.sp,
                     color = palette.sub,
@@ -1018,7 +1063,7 @@ fun SettingsScreen(
             Text("玻璃不透明度：${(d.glassAlpha * 100).toInt()}%", fontSize = 12.sp, color = palette.sub)
             Slider(value = d.glassAlpha, onValueChange = { update(d.copy(glassAlpha = it)) }, valueRange = 0.3f..1f)
             Spacer(Modifier.height(4.dp))
-            Text(
+            HintText(
                 "玻璃背景模糊：${d.glassBlur.toInt()}dp（面板背后是这张背景图的真实模糊，调到 0 就没有玻璃感了）",
                 fontSize = 12.sp,
                 color = palette.sub,
@@ -1103,7 +1148,7 @@ fun SettingsScreen(
 
         GlassCard(d.glassAlpha) {
             Text("高级设置", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
-            Text(
+            HintText(
                 "接口地址 / API Key / 模型、微信内自动分析（参考条数 · 最短间隔 · temperature · 敏感内容检查）、\n" +
                     "备份 / 迁移、诊断 —— 都在这一层里面。",
                 fontSize = 12.sp,
@@ -1123,7 +1168,7 @@ fun SettingsScreen(
             Spacer(Modifier.height(6.dp))
             Text("版本：${appVersion(context)}", fontSize = 12.sp, color = palette.text)
             Spacer(Modifier.height(6.dp))
-            Text(
+            HintText(
                 "· 开启后，聊天页最近几条消息会发送到你填写的接口地址，请自行确认该服务可信。\n" +
                     "· API Key 以明文存放在本应用私有目录（不能加密：注入微信进程的代码需要跨进程读取，Keystore 密钥按 UID 隔离读不到）。\n" +
                     "· 只读消息、只把候选回复填进输入框，不会自动发送；但仍属于修改微信客户端行为，有风控风险，建议先用小号。\n" +
@@ -1483,7 +1528,7 @@ fun AdvancedScreen(
                 Text("上次拉取 ${formatTime(modelsAt)}（存在本机；换了接口 / Key 记得重新拉一次）", fontSize = 10.sp, color = palette.sub)
             }
             Spacer(Modifier.height(4.dp))
-            Text(
+            HintText(
                 "拉不到不代表接口不能用：有的服务商没这个接口，有的中转只回一份目录（列出来 ≠ 你的 Key 能用）。手动填一样用。",
                 fontSize = 10.sp,
                 color = palette.sub,
@@ -1492,7 +1537,7 @@ fun AdvancedScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("严格 JSON 输出", fontSize = 15.sp, color = palette.text)
-                    Text(
+                    HintText(
                         "请求里带 response_format=json_object，让服务端保证回的是合法 JSON，" +
                             "能少一些「模型没返回 JSON」。有些中转不支持 —— 开了报错就关掉。" +
                             "只影响生成候选，不影响单条改写和风格提炼。",
@@ -1660,7 +1705,7 @@ fun AdvancedScreen(
                     color = palette.warn,
                 )
                 Spacer(Modifier.height(4.dp))
-                Text(
+                HintText(
                     "如果状态行显示「服务在跑」但过一会儿就没了：这个应用需要常驻，请把它加入系统的" +
                         "「电池优化白名单 / 允许后台运行」（各家名字不同：华为「应用启动管理」、小米「省电策略·无限制」、" +
                         "OPPO / vivo 类似）。",
@@ -1731,7 +1776,7 @@ fun AdvancedScreen(
                 GlassPill("模型分级", d.graded, Modifier.weight(1f)) { saveGraded(true) }
             }
             Spacer(Modifier.height(6.dp))
-            Text(
+            HintText(
                 if (!d.graded) {
                     "直通：所有事都交给一套接口 + 一份提示词，一次调用搞定（默认，和以前一样）。"
                 } else {
@@ -2060,7 +2105,7 @@ fun AdvancedScreen(
                 Text("长按任意一项可多选，然后一次移出 / 删除。", fontSize = 11.sp, color = palette.sub)
                 }
                 Spacer(Modifier.height(6.dp))
-                Text(
+                HintText(
                     "名字要和微信里显示的一致（群聊填群名；改过备注的用改过的名字）；懒得敲字就用下面的「拉取会话列表」。",
                     fontSize = 11.sp,
                     color = palette.sub,
@@ -2069,7 +2114,7 @@ fun AdvancedScreen(
 
             Spacer(Modifier.height(12.dp))
             Text("从微信里列出来", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = palette.text)
-            Text(
+            HintText(
                 "点一下，然后回微信的首页或通讯录停两秒（滚一下能多收几个），再回来打开下面的「拉取到的联系人」去挑。\n" +
                     "白名单开着的时候，你打开过的那个聊天也会自己进来（认的是聊天页顶上那个名字，也就是备注）。\n" +
                     "⚠ 个人资料页不是来源 —— 那一页只有「微信号 / 地区」这种字段，读出来全是杂项，别在那里等。",
@@ -2188,7 +2233,7 @@ fun AdvancedScreen(
                 }
             }
             Spacer(Modifier.height(4.dp))
-            Text(
+            HintText(
                 "自己填的地址要能返回 JSON（内置用的是 ip.useragentinfo.com）；认不出的字段一律当没有，不会报错。",
                 fontSize = 10.sp,
                 color = palette.sub,
@@ -2236,7 +2281,7 @@ fun AdvancedScreen(
                 shape = RoundedCornerShape(14.dp),
             ) { Text("导出诊断包（.zip）") }
             Spacer(Modifier.height(4.dp))
-            Text(
+            HintText(
                 "出问题时用它：环境 / 配置（不含 Key）/ 角色条数 / 抓到的界面结构 / 最近一次调用。\n" +
                     "⚠️ 里面有你和对方的聊天内容，发出去之前先自己看一眼。",
                 fontSize = 11.sp,
@@ -3213,7 +3258,7 @@ private fun SelfStyleDetail(store: ConfigStore, glassAlpha: Float) {
                     StatCell(if (skillAt > 0) formatTime(skillAt) else "—", "上次生成", Modifier.weight(1f))
                 }
                 if (skill.isBlank()) {
-                    Text(
+                    HintText(
                         "还没有生成过。攒够 ${StyleSkill.MIN_SAMPLES} 条样本之后，可以点下面手动生成一次（不用等到中午）。",
                         fontSize = 12.sp,
                         color = palette.sub,
