@@ -243,6 +243,7 @@ internal class Panel(private val a: Activity) {
         rewriteBusy = false
         onChat = false
         generation++
+        if (expanded) Trace.note("卡片", "收起（微信这一页暂停 / 切走）")
         expanded = false
         body = Body.None
         handler.removeCallbacks(ticker)
@@ -280,7 +281,7 @@ internal class Panel(private val a: Activity) {
         refresh.setOnClickListener { regenerate() }
         // 收起：只是折回小按钮，不拉黑这一条 —— 再点按钮随时能打开
         val collapse = label("▾", 16f, colorSub) { setPadding(dp(12), 0, 0, 0) }
-        collapse.setOnClickListener { setExpanded(false) }
+        collapse.setOnClickListener { setExpanded(false, "用户点卡片右上角 ▾") }
         head.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         head.addView(refresh)
         head.addView(collapse)
@@ -400,11 +401,16 @@ internal class Panel(private val a: Activity) {
         maybeAnswerProbe()
 
         if (!decor.hasWindowFocus()) {
-            // 没焦点通常什么都不做 —— 但「有些对话连气泡都不出现」就是从这类早退里溜走的：
-            // 只要这一屏**确实是个聊天页**（找得到输入框），就留一个能点的按钮，把原因写在上面。
-            if (reader.findChatInput(decor) != null) {
-                Trace.note("焦点", "窗口没焦点，但这一屏是聊天页 → 留一个按钮说明情况")
-                showStuck("军师 · 窗口没焦点", "现在读不了这一屏：微信不在前台，或者被别的窗口盖着。\n回到微信这一页停一下就恢复。")
+            // 没焦点通常什么都不做 —— 但「有些对话连气泡都不出现」就是从这类早退里溜走的。
+            // 只要这一屏**像**聊天页就留一个能点的按钮（宁松勿紧，见 [chatPageEvidence]）。
+            val why = chatPageEvidence(reader.findInputCandidate(decor), decor, cheap = true)
+            if (why != null) {
+                Trace.note("焦点", "窗口没焦点，但这一屏像聊天页（$why）→ 留一个按钮说明情况")
+                showStuck(
+                    "军师 · 窗口没焦点",
+                    "现在读不了这一屏：微信不在前台，或者被别的窗口盖着。\n" +
+                        "回到微信这一页停一下就恢复。\n（判断依据：$why）",
+                )
             } else {
                 Trace.note("焦点", "窗口没焦点（微信不在前台，或被别的窗口盖着）")
             }
@@ -439,20 +445,21 @@ internal class Panel(private val a: Activity) {
             }
             // 这是「有些对话连气泡都不出现」的老根因：以前不管这一屏是不是聊天页，一律 hideAll()，
             // 屏幕上就什么都不剩了 —— 用户既看不到状态，也没法自查。
-            // 现在：屏幕上还有「像输入框」的控件（= 这确实是个聊天页）就留一个按钮说明情况；
-            // 真的是别的页面（通讯录 / 朋友圈…）才整块藏掉。
-            val looksLikeChat = cand0 != null || reader.findList(decor, null) != null
-            if (looksLikeChat) {
-                // 两种情况都会走到这儿：① 微信改了控件；② **按下「按住说话」时输入框被设成 GONE**
-                // （连候选都找不到，但消息列表还在）—— 后者正是最常见的「某些对话连气泡都不出现」。
+            val why = chatPageEvidence(cand0, decor, cheap = false)
+            if (why != null) {
+                // 走到这儿的情况：① 微信改了控件；② **按下「按住说话」时输入框被设成 GONE**（连候选都没有）；
+                // ③ 这一屏的视图树太大、走到输入框之前就撞上了遍历预算。
+                Trace.note("兜底", "读不到输入框，但这一屏像聊天页（$why）→ 留按钮说明")
                 showStuck(
                     "军师 · 读不到输入框",
                     "这一屏是聊天页，但读不到能用的输入框。\n" +
-                        "常见原因：正在「按住说话」（输入框被微信藏起来）、或者用的是分屏 / 小窗。\n" +
-                        "诊断已经记下来了 —— 长按标题可以再生成一份。",
+                        "常见原因：正在「按住说话」（微信把输入框藏起来了）、用的是分屏 / 小窗，\n" +
+                        "或者这一屏的控件太多、没扫到输入框。\n" +
+                        "（判断依据：$why）长按标题可以再生成一份诊断。",
                 )
             } else {
-                hideAll()
+                Trace.note("兜底", "既没有输入框也没有消息列表，Activity=${a.javaClass.simpleName} → 整块藏起来")
+                hideAll("不是聊天页（没有输入框、也没有消息列表）")
             }
             return
         }
@@ -465,7 +472,7 @@ internal class Panel(private val a: Activity) {
         val cfg = config ?: return
         if (!cfg.enabled) {
             Trace.note("开关", "总开关关着（设置 → 微信内自动分析）→ 这一页什么都不做")
-            hideAll()
+            hideAll("总开关关着")
             return
         }
         // 从别的页面切回来时，指纹没变会提前 return —— 这里先把按钮的可见性对一遍，
@@ -544,7 +551,16 @@ internal class Panel(private val a: Activity) {
             body = Body.None
             // 换了会话（或提示词 / 档案变了）：上一屏的内容已经不属于这里 ——
             // 这是少数几处「替用户收」的地方之一，不收就会拿着别人的结果改这条消息。
-            setExpanded(false)
+            // 轨迹里必须分清是哪一种：同名但指纹变了 = 设置 / 角色档案 / 说话风格在抖（那是真 bug）。
+            val anotherChat = observedName != chatName
+            Trace.note(
+                "换会话",
+                if (anotherChat) "会话名变了（$chatName → $observedName）→ 重置这一屏"
+                else "同名但上下文指纹变了（设置 / 角色档案 / 说话风格之一）→ 只重置内容，不动折叠",
+            )
+            // **只有真的换了人才替用户收起卡片**。同名而指纹抖一下（改了设置、档案长了一条、说话风格更新）
+            // 不该把用户正开着的那张卡拍下去 —— 这正是「点开又自己关」最隐蔽的一种来源。
+            if (anotherChat) setExpanded(false, "换了会话")
             showIdle()
         }
         // 指纹只由「看得见的内容 + 这一屏的身份」决定。
@@ -1389,7 +1405,7 @@ internal class Panel(private val a: Activity) {
         bodyBox.addView(go, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
         // 这条要你亲自拍板「发不发」，所以直接摊开，不折叠
         setChip("⚠ 敏感内容 · 点开看", 0xE6C97A00.toInt())
-        setExpanded(true)
+        setExpanded(true, "敏感命中（状态转移）")
     }
 
     private fun showMessage(message: String, isError: Boolean = false) {
@@ -1403,7 +1419,7 @@ internal class Panel(private val a: Activity) {
             if (isError) "⚠ 军师出错 · 点开看" else "军师 · 点开看",
             if (isError) 0xE6D64545.toInt() else 0xE67C3AED.toInt(),
         )
-        setExpanded(true)
+        setExpanded(true, if (isError) "出错，要你看一眼" else "提示，要你看一眼")
     }
 
     // ---------------- 折叠 / 展开 ----------------
@@ -1420,7 +1436,16 @@ internal class Panel(private val a: Activity) {
         chip.visibility = if (!expanded && onChat) View.VISIBLE else View.GONE
     }
 
-    private fun setExpanded(visible: Boolean) {
+    /**
+     * 折叠 / 展开的**唯一出口**。
+     *
+     * 不只改状态，还把「谁让它变的」写进轨迹 —— 以前没有这一条，于是用户说的
+     * 「卡片自己关了」在轨迹里**完全看不见**（这也是它拖了两轮没查出来的原因）。
+     */
+    private fun setExpanded(visible: Boolean, why: String = "") {
+        if (expanded != visible) {
+            Trace.note("卡片", (if (visible) "展开" else "收起") + "（$why）")
+        }
         expanded = visible
         applyVisibility()
     }
@@ -1453,18 +1478,23 @@ internal class Panel(private val a: Activity) {
      * 于是「有缓存可看」的那一屏点一下等于白烧一次 token，还要等模型回来才有内容。
      */
     private fun onChipClick() {
-        when (chipTap(expanded, busy, hasResult, cache.containsKey(lastFingerprint))) {
-            ChipTap.Collapse -> setExpanded(false)
-            ChipTap.Expand -> setExpanded(true)
+        val action = chipTap(expanded, busy, hasResult, cache.containsKey(lastFingerprint))
+        Trace.note(
+            "点击",
+            "点按钮 → $action（expanded=$expanded busy=$busy 有内容=$hasResult 有缓存=${cache.containsKey(lastFingerprint)} 正文=$body）",
+        )
+        when (action) {
+            ChipTap.Collapse -> setExpanded(false, "用户点按钮收起")
+            ChipTap.Expand -> setExpanded(true, "用户点按钮展开（手上已有内容）")
             ChipTap.Restore -> {
                 val cached = cache[lastFingerprint] ?: return
                 Trace.note("缓存", "点按钮：这一屏的结果还在缓存里，直接摆出来（不重新调模型）")
-                setExpanded(true)
+                setExpanded(true, "用户点按钮展开（摆缓存）")
                 render(cached, lastMsgs, fromCache = true)
             }
             ChipTap.Regenerate -> {
                 // 先把卡片打开：重新识别要等模型，开着才有「正在读这一屏」可看
-                setExpanded(true)
+                setExpanded(true, "用户点按钮展开（去重新识别）")
                 regenerate()
             }
         }
@@ -1499,7 +1529,14 @@ internal class Panel(private val a: Activity) {
         bodyBox.addView(label("正在读这一屏、调接口…", 13f, colorMain))
     }
 
-    private fun hideAll() {
+    /**
+     * 整块藏掉（card + chip 一起）。
+     *
+     * [why] 只进轨迹：这是**唯一**能让用户屏幕上「什么都没有」的地方，所以必须留下是谁让它藏的
+     * （用户实测抱怨的「一句话也没有」就是它 —— 以前它在轨迹里没有痕迹）。
+     */
+    private fun hideAll(why: String) {
+        Trace.note("隐藏", "整块藏起来（$why）")
         // In a non-chat page this runs on every tick; invalidate async work only once
         // when leaving an active chat/request state.
         if (onChat || busy || rewriteBusy) {
@@ -1516,6 +1553,23 @@ internal class Panel(private val a: Activity) {
         lastScreenFingerprint = ""
         card.visibility = View.GONE
         chip.visibility = View.GONE
+    }
+
+    /**
+     * 「这一屏像不像聊天页」的证据（**宁松勿紧**）。
+     *
+     * 松的代价：可能在不该出现的地方留一个小按钮（看得见、也能忽略，而且按钮上就写着原因）；
+     * 紧的代价：屏幕上**什么都没有** —— 既看不到状态，也没法自查（用户实测就是这么抱怨的）。
+     * 三个信号任一成立就算数：认得出输入框 / 认得出消息列表 / Activity 名字像聊天页。
+     *
+     * [cheap] = true 时不翻列表（省一次整树遍历，给「窗口没焦点」这种每轮都会走到的路径用）。
+     */
+    private fun chatPageEvidence(cand: View?, decor: View, cheap: Boolean): String? = when {
+        cand != null -> "有像输入框的控件"
+        !cheap && reader.findList(decor, null) != null -> "有像消息列表的容器"
+        a.javaClass.simpleName.contains("Chatting", ignoreCase = true) ->
+            "Activity 名字像聊天页（${a.javaClass.simpleName}）"
+        else -> null
     }
 
     /**
