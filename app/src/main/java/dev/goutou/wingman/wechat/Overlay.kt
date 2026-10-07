@@ -141,7 +141,17 @@ internal class Panel(private val a: Activity) {
      */
     private var expanded = false
     /** 卡片里现在是不是一份「能看的结果」（候选回复 / 敏感拦截）。不是的话，点按钮该去重新识别。 */
-    private var hasResult = false
+    /**
+     * 卡片正文现在是什么 —— **唯一的「内容类型」真值**。
+     *
+     * 以前靠一堆布尔互相推断（hasResult / bodyBox.childCount / sensitiveHits），于是出现自相矛盾的界面：
+     * 正文显示着上一次的结果、按钮却写着「敏感内容」；用户点 ▾ 收起来、下一轮又被弹开。
+     * 规矩：判定一律判**类型**，不判「非空」。
+     */
+    private var body = Body.None
+    /** 手上有没有「能看的内容」（点按钮是打开还是去识别，看它）。 */
+    private val hasResult: Boolean
+        get() = body == Body.Result || body == Body.Sensitive || body == Body.Message
     /** 折叠按钮上的字，跟着状态走。 */
     private var chipText = ""
 
@@ -234,7 +244,7 @@ internal class Panel(private val a: Activity) {
         onChat = false
         generation++
         expanded = false
-        hasResult = false
+        body = Body.None
         handler.removeCallbacks(ticker)
         card.visibility = View.GONE
         chip.visibility = View.GONE
@@ -431,10 +441,14 @@ internal class Panel(private val a: Activity) {
             // 屏幕上就什么都不剩了 —— 用户既看不到状态，也没法自查。
             // 现在：屏幕上还有「像输入框」的控件（= 这确实是个聊天页）就留一个按钮说明情况；
             // 真的是别的页面（通讯录 / 朋友圈…）才整块藏掉。
-            if (cand0 != null) {
+            val looksLikeChat = cand0 != null || reader.findList(decor, null) != null
+            if (looksLikeChat) {
+                // 两种情况都会走到这儿：① 微信改了控件；② **按下「按住说话」时输入框被设成 GONE**
+                // （连候选都找不到，但消息列表还在）—— 后者正是最常见的「某些对话连气泡都不出现」。
                 showStuck(
-                    "军师 · 读不到这一屏",
-                    "这一屏看着像聊天页，但读不到能用的输入框（微信可能改了控件）。\n" +
+                    "军师 · 读不到输入框",
+                    "这一屏是聊天页，但读不到能用的输入框。\n" +
+                        "常见原因：正在「按住说话」（输入框被微信藏起来）、或者用的是分屏 / 小窗。\n" +
                         "诊断已经记下来了 —— 长按标题可以再生成一份。",
                 )
             } else {
@@ -527,16 +541,17 @@ internal class Panel(private val a: Activity) {
             lastFingerprint = ""
             lastCallAt = 0L
             skipSensitiveFor = ""
-            hasResult = false
+            body = Body.None
             // 换了会话（或提示词 / 档案变了）：上一屏的内容已经不属于这里 ——
             // 这是少数几处「替用户收」的地方之一，不收就会拿着别人的结果改这条消息。
             setExpanded(false)
             showIdle()
         }
-        val historyRevision = conversationDigest(*profile?.msgs.orEmpty().map {
-            roleObservationKey(observedName, it.fromMe, it.text)
-        }.toTypedArray())
-        val fingerprint = conversationDigest(observedName, reader.fingerprint(list), revision, historyRevision)
+        // 指纹只由「看得见的内容 + 这一屏的身份」决定。
+        // 以前还塞了 historyRevision（整份角色档案的 digest）：那是**每 tick 对最多 400 条记录算一次哈希**，
+        // 而且档案每长一句话就被当成「这一屏变了」→ 缓存必 miss、在飞的请求被作废。
+        // 「档案变了要不要重新问」是 ask() 那一刻用 roleContext 决定的事，不该让「这一屏变没变」跟着抖。
+        val fingerprint = conversationDigest(observedName, reader.fingerprint(list), revision)
         if (!force && !ocr.takeDirty() && fingerprint == lastScreenFingerprint) {
             Trace.note("跳过", "会话、资料和这一屏未变，不重复读")
             return
@@ -559,11 +574,8 @@ internal class Panel(private val a: Activity) {
         }
         // 到这儿每张图都已经有确定结果了（认到的文字 / 确实没字 / 失败冷却），解析只是个纯查询
         val msgs = parser.parse(rows) { img -> ocr.textOf(img) }.takeLast(cfg.ctx)
-        // 「这一屏」的稳定键：只跟**看得见的内容**有关。敏感确认、「跳过」类判定都以它为准。
-        screenKey = conversationDigest(
-            observedName, reader.fingerprint(list),
-            *msgs.map { conversationDigest(it.fromMe.toString(), it.text) }.toTypedArray(),
-        )
+        // 「这一屏」的稳定键：只跟**看得见的内容**有关（纯函数，单测见 ConversationStateTest）。
+        screenKey = screenIdentity(observedName, reader.fingerprint(list), msgs)
         // 只记**条数和方向**，不记正文：轨迹会顺着心跳回传、常驻 App 本地，
         // 不该比诊断包更容易泄露聊天内容。一条都没解析出来时这一条不记 —— 紧接着的「空」会说清楚。
         if (msgs.isNotEmpty()) {
@@ -670,7 +682,10 @@ internal class Panel(private val a: Activity) {
             return
         }
         val roleContext = roleContextFor(chatName, msgs)
-        val requestKey = conversationRequestKey(chatName, settings, roleContext, msgs)
+        // 这把键必须**稳定**：cache / pendingRequestKey / 敏感放行 全挂在它上面。
+        // 以前混进了 roleContext（角色档案每轮都在长）→ 缓存必 miss（白烧 token）、在飞的请求被
+        // generation++ 作废、刚点过的「敏感放行」下一轮就失效（点了没完没了地弹回风险卡）。
+        val requestKey = resultKey(screenKey, settings)
         lastFingerprint = requestKey
         // 留着这一屏的消息：点按钮要「摆出缓存」时用它渲染历史行（[onChipClick] 的 ③）
         lastMsgs = msgs
@@ -760,6 +775,12 @@ internal class Panel(private val a: Activity) {
      */
     private val prober = object : Runnable {
         override fun run() {
+            // 泄漏防线：这个匿名对象持有 Panel，Panel 持有 Activity。页面销毁后还一直自我重投的话，
+            // 主线程消息队列会永远替它排队 —— 微信打开过的 Activity 一个都回收不了。
+            if (a.isFinishing || a.isDestroyed) {
+                handler.removeCallbacks(this)
+                return
+            }
             runCatching { maybeAnswerProbe() }
             handler.postDelayed(this, PROBE_POLL_MS)
         }
@@ -776,7 +797,8 @@ internal class Panel(private val a: Activity) {
         }.getOrNull().orEmpty()
         Heartbeat.send(
             a, 0,
-            probe = "页面=" + a.javaClass.simpleName + (if (ver.isBlank()) "" else " · 微信 $ver"),
+            // 带上请求号（= 那次请求的时间戳）：App 就能分辨「这一轮探测被回答了」还是「答的是更早那一轮」
+            probe = "#$req · 页面=" + a.javaClass.simpleName + (if (ver.isBlank()) "" else " · 微信 $ver"),
         )
     }
 
@@ -1236,7 +1258,7 @@ internal class Panel(private val a: Activity) {
     }
 
     private fun render(s: Suggestion, msgs: List<ChatMsg>, fromCache: Boolean) {
-        hasResult = true
+        body = Body.Result
         title.text = "军师 · ${s.intent} · 风险${s.risk}" + if (fromCache) " · 缓存" else ""
         title.setTextColor(riskColor(s.risk))
         bodyBox.removeAllViews()
@@ -1337,9 +1359,12 @@ internal class Panel(private val a: Activity) {
     }
 
     private fun renderSensitive(hits: List<String>) {
-        hasResult = true
-        // 同一屏、同一批命中词、卡片已经摆着 → 不重建。重建会让卡片每轮闪一次，看着像死循环。
-        if (expanded && sensitiveHits == hits && bodyBox.childCount > 0) {
+        // 「有变化」= 第一次进敏感态、或命中词换了。**只有变化时才动正文与折叠状态**：
+        // 同一批词复现时只更新按钮 —— 以前这里无条件 setExpanded(true)，
+        // 用户点 ▾ 收起来、900ms 后又被弹开，根本按不住。
+        val changed = body != Body.Sensitive || sensitiveHits != hits
+        body = Body.Sensitive
+        if (!changed) {
             setChip("⚠ 敏感内容 · 点开看", 0xE6C97A00.toInt())
             return
         }
@@ -1368,7 +1393,7 @@ internal class Panel(private val a: Activity) {
     }
 
     private fun showMessage(message: String, isError: Boolean = false) {
-        hasResult = false
+        body = Body.Message
         title.text = if (isError) "生成失败" else "TalkTact"
         title.setTextColor(if (isError) colorBad else colorAccent)
         bodyBox.removeAllViews()
@@ -1454,7 +1479,7 @@ internal class Panel(private val a: Activity) {
      * 也就是「点开又自动关闭」的来源。要收，用户点 ▾；离开聊天页时 [hideAll] 会收。
      */
     private fun showIdle(reason: String = "", chip: String = "↻ 识别") {
-        hasResult = false
+        body = Body.Idle
         setChip(chip)
         if (!expanded || reason.isBlank()) return
         // 卡片开着：就地换成一句说明，别把它抽走（抽走就是「自动关闭」）
@@ -1466,6 +1491,7 @@ internal class Panel(private val a: Activity) {
 
     /** 正在调接口：按钮上就能看出来，默认不摊开卡片打扰人（但展开着的那份也同步成进度）。 */
     private fun showThinking() {
+        body = Body.Thinking
         setChip("军师 · 思考中…")
         title.text = "军师 · 思考中…"
         title.setTextColor(colorAccent)
@@ -1484,8 +1510,10 @@ internal class Panel(private val a: Activity) {
         onChat = false
         noListTicks = 0
         expanded = false
-        hasResult = false
+        body = Body.None
         stuckReason = ""
+        // 离开这一屏也要把指纹作废，回来才会重新渲染一次
+        lastScreenFingerprint = ""
         card.visibility = View.GONE
         chip.visibility = View.GONE
     }
@@ -1502,7 +1530,11 @@ internal class Panel(private val a: Activity) {
     private fun showStuck(chip: String, reason: String) {
         onChat = true // 折叠按钮的可见性要求 onChat
         stuckReason = reason
-        hasResult = false
+        body = Body.Stuck
+        // ⚠️ 必须把「这一屏渲染过了」作废：否则弹出的窗口一关、指纹又变回原样，
+        //   下一轮在指纹那一步就提前 return —— 界面永远停在「读不到这一屏」，点按钮还会白烧一次 token。
+        lastScreenFingerprint = ""
+        // 上面这行的道理同 hideAll 里的同名写法。
         setChip(chip, 0xE6C97A00.toInt())
         if (expanded) renderStuck()
     }
@@ -1586,6 +1618,14 @@ private const val PROBE_POLL_MS = 6_000L
  * 「缓存里有结果却去重新调模型」那个 bug 就藏在这儿（见 [chipTap] 的注释）。
  */
 enum class ChipTap { Collapse, Expand, Restore, Regenerate }
+
+/**
+ * 卡片正文的类型（注入侧状态机唯一的「内容类型」真值）。
+ *
+ * 存在的理由：以前用 `hasResult` + `bodyBox.childCount` + `sensitiveHits` 互相推断正文是什么，
+ * 于是守卫会误命中（正文是结果、却按敏感卡处理），而且用户点 ▾ 也收不起来。
+ */
+private enum class Body { None, Idle, Thinking, Stuck, Sensitive, Result, Message }
 
 /**
  * 点折叠按钮的判定（纯函数，单测见 ChipTapTest）。

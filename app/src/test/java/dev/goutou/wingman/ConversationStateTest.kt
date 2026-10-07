@@ -8,38 +8,42 @@ class ConversationStateTest {
     private val messages = listOf(ChatMsg(false, "好的"))
 
     @Test fun `same message in different conversations has separate replies and records`() {
-        assertNotEquals(conversationRequestKey("张三", "cfg", null, messages), conversationRequestKey("项目群", "cfg", null, messages))
+        assertNotEquals(
+            resultKey(screenIdentity("张三", "屏", messages), "cfg"),
+            resultKey(screenIdentity("项目群", "屏", messages), "cfg"),
+        )
         assertNotEquals(roleObservationKey("张三", false, "好的"), roleObservationKey("李四", false, "好的"))
         assertEquals(roleObservationKey("张三", false, "好的"), roleObservationKey("张三", false, "好的"))
     }
 
-    @Test fun `style profile history and settings changes invalidate cached reply`() {
-        val original = conversationRequestKey("张三", "cfg", "风格A\n同事\n旧记录A", messages)
-        for ((settings, context) in listOf(
-            "cfg" to "风格B\n同事\n旧记录A",
-            "cfg" to "风格A\n朋友\n旧记录A",
-            "cfg" to "风格A\n同事\n旧记录B",
-            "model2" to "风格A\n同事\n旧记录A",
-            "cfg" to null,
-        )) assertNotEquals(original, conversationRequestKey("张三", settings, context, messages))
-        assertEquals(original, conversationRequestKey("张三", "cfg", "风格A\n同事\n旧记录A", messages))
+    /**
+     * **回归测试**：角色档案长起来不许让键失效。
+     *
+     * 以前这把键里混了 `roleContext`（角色档案每 900ms 就可能长一条），于是：
+     * 同一屏反复 miss、反复问模型（白烧 token）；用户刚点过的「仍然分析这一条」下一轮就失效
+     * （一直弹回风险卡）—— 用户实测报的就是这个。现在键只看「这一屏 + 设置」。
+     */
+    @Test fun `growing archives must not invalidate the key settings still should`() {
+        val screen = screenIdentity("张三", "这一屏", messages)
+        assertEquals(resultKey(screen, "cfg"), resultKey(screen, "cfg"))
+        assertNotEquals(resultKey(screen, "cfg"), resultKey(screen, "model2"))
     }
 
-    @Test fun `entire transcript including author direction and OCR participates in cache key`() {
-        val original = conversationRequestKey("群", "cfg", null, messages)
+    @Test fun `entire transcript including author direction and OCR participates in the screen identity`() {
+        val original = screenIdentity("群", "屏", messages)
         for (changed in listOf(
             listOf(ChatMsg(true, "好的")),
             listOf(ChatMsg(false, "好的", "小明")),
             listOf(ChatMsg(false, "好的", attachment = true)),
             listOf(ChatMsg(false, "前文")) + messages,
             listOf(ChatMsg(false, "[图片] 新文字")),
-        )) assertNotEquals(original, conversationRequestKey("群", "cfg", null, changed))
+        )) assertNotEquals(original, screenIdentity("群", "屏", changed))
     }
 
     @Test fun `length prefixed keys distinguish delimiter text and scopes`() {
         assertNotEquals(conversationDigest("a|b", "c"), conversationDigest("a", "b|c"))
         assertNotEquals(conversationDigest("ab", "c"), conversationDigest("a", "bc"))
         assertNotEquals(roleObservationKey("张三", true, "好的"), roleObservationKey("张三", false, "好的"))
-        assertFalse(conversationRequestKey("张三", "cfg", "私人档案", messages).contains("私人档案"))
+        assertFalse(screenIdentity("张三", "屏", messages).contains("张三"))
     }
 }

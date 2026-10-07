@@ -290,17 +290,21 @@ private val LightPalette = Palette(
     glass = Color(0xFFFFFFFF),
     glassTint = Color(0xFFFFFFFF),
     glassBorder = Color(0xB3FFFFFF),
-    // L1：紫灰雾面（比背景更深更紫），不再「在近白底上再提白」
-    glassFillTop = Color(0xFFF7F2FE),
-    glassFillBottom = Color(0xFFDACDF3),
-    glassFillTopAlpha = 0.62f,
-    glassFillBottomAlpha = 0.52f,
+    // L1：紫晶玻璃（**比背景更暗更紫**）。数值按实测背景校准：
+    //   #C7B6F6 @0.50 铺在 (229,220,248) 上 = (214,201,247) → 比背景暗 5.0%、B−R 由 +19 升到 +33
+    //   #B7A1E6 @0.50 铺在 (211,195,238) 上 = (197,178,234) → 暗 5.4%、更紫；卡内自上而下约 8% 明暗过渡
+    glassFillTop = Color(0xFFC7B6F6),
+    glassFillBottom = Color(0xFFB7A1E6),
+    // 基准值按「默认玻璃强度（0.92）时正好落到设计师给的 0.50」标定 —— 见 fillAlpha()
+    glassFillTopAlpha = 0.40f,
+    glassFillBottomAlpha = 0.40f,
     glassEdgeHi = Color(0xFFFFFFFF),
-    glassEdgeHiAlpha = 0.85f,
+    glassEdgeHiAlpha = 0.60f,
     glassEdgeMidAlpha = 0.16f,
-    glassEdgeLow = Color(0xFFB79FE8),
-    glassEdgeLowAlpha = 0.30f,
-    glassTopEdgeAlpha = 0.75f,
+    // 右下折射暗边：新填充变暗后，旧紫边比卡面还亮（会翻成「亮边」），所以压暗半档
+    glassEdgeLow = Color(0xFFA98FE0),
+    glassEdgeLowAlpha = 0.32f,
+    glassTopEdgeAlpha = 0.60f,
     glassTopEdgeDp = 1.5f,
     glassBottomEdge = Color(0xFF8E6FD6),
     glassBottomEdgeAlpha = 0.18f,
@@ -1011,9 +1015,10 @@ fun GlassPill(text: String, selected: Boolean, modifier: Modifier = Modifier, on
                     )
                 } else {
                     Brush.verticalGradient(
+                        // L2 常态块：白 0.18/0.10 —— L1 变暗后，低于 3% 的差就看不见了
                         listOf(
-                            palette.glassTint.copy(alpha = 0.16f),
-                            palette.glassTint.copy(alpha = 0.09f),
+                            palette.glassTint.copy(alpha = 0.18f),
+                            palette.glassTint.copy(alpha = 0.10f),
                         ),
                     )
                 },

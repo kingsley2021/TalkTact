@@ -270,8 +270,8 @@ private fun CheckRow(check: Check, glassAlpha: Float) {
     GlassSurface(
         shape = RoundedCornerShape(RadiusR2),
         glassAlpha = glassAlpha,
-        tintTop = 0.26f * glassAlpha,
-        tintBottom = 0.18f * glassAlpha,
+        // 直接铺在渐变上的行也是 L1 —— 统一走 L1 的填充数值（以前自己写一套 0.26/0.18，
+        // 结果比卡片还亮，一眼就分成两种材质）
         modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
         onClick = check.onClick,
     ) {
@@ -305,8 +305,8 @@ private fun DetailToggle(
     GlassSurface(
         shape = RoundedCornerShape(RadiusR2),
         glassAlpha = glassAlpha,
-        tintTop = 0.26f * glassAlpha,
-        tintBottom = 0.18f * glassAlpha,
+        // 直接铺在渐变上的行也是 L1 —— 统一走 L1 的填充数值（以前自己写一套 0.26/0.18，
+        // 结果比卡片还亮，一眼就分成两种材质）
         modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
         onClick = onClick,
     ) {
@@ -353,13 +353,19 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
 
     // 实时探测的结论（问题 5）：模块「现在还在不在」只认这条，心跳时间戳退居「历史」。
     val nowMs = System.currentTimeMillis()
+    // 回执里带着请求号（「#<那次请求的时间戳>」）：只有**号和当前这一轮对得上**才算「这一轮被回答了」。
+    // 否则新建的面板会去答一个很久以前的旧请求，界面会误报「刚刚回过话」。
+    val ackId = probeWhere.removePrefix("#").substringBefore(' ').toLongOrNull() ?: 0L
+    val answered = probeReqAt > 0 && ackId == probeReqAt
+    val whereText = probeWhere.substringAfter(" · ", "").ifBlank { probeWhere }
+
     val liveText: String
     val liveLevel: Level
     when {
-        probeAckAt > 0 && probeAckAt >= probeReqAt -> {
+        answered -> {
             val secs = (nowMs - probeAckAt) / 1000
-            liveText = "刚刚回过话：${secs} 秒前" + if (probeWhere.isBlank()) "" else " · $probeWhere"
-            liveLevel = if (nowMs - probeAckAt < 60_000L) Level.OK else Level.WARN
+            liveText = "刚刚回过话：${secs} 秒前" + if (whereText.isBlank()) "" else " · $whereText"
+            liveLevel = if (nowMs - probeAckAt < 120_000L) Level.OK else Level.WARN
         }
         probeReqAt > 0 && nowMs - probeReqAt < 10_000L -> {
             liveText = "已发出探测，正在等微信进程回话…（要微信在运行）"
@@ -381,8 +387,8 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
         store.requestProbe()
         tick++
     }
-    LaunchedEffect(probeAckAt >= probeReqAt) {
-        if (probeAckAt < probeReqAt) repeat(12) {
+    LaunchedEffect(answered) {
+        if (!answered) repeat(12) {
             kotlinx.coroutines.delay(1000)
             tick++
         }
