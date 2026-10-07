@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -92,6 +93,27 @@ class ScreenRenderTest {
     }
 
     /**
+     * 页面截图的外壳：**把真实的渐变背景画在页面底下**。
+     *
+     * 这一点很关键 —— 以前这几个用例直接 `setContent { AdvancedScreen(...) }`，
+     * 底下是 Material 默认的 #FAFAFA。玻璃卡片压在一块「近白平面」上，看起来永远像白板，
+     * 于是「玻璃到底透不透」在 CI 截图里根本验不了（第 6 版就是这么被误判成白板的）。
+     * 现在截图和真机一样：渐变背景 → 玻璃卡片。
+     */
+    private fun page(dark: Boolean = false, content: @Composable () -> Unit) {
+        rule.setContent {
+            GoutouTheme(dark = dark) {
+                val backdrop = rememberBackdrop(bgUri = "", dim = 0f, blur = 24f)
+                Box(
+                    Modifier.fillMaxSize().drawBehind {
+                        drawBackdropArt(backdrop, size.width, size.height, GlassQuality.HIGH)
+                    },
+                ) { content() }
+            }
+        }
+    }
+
+    /**
      * 内置渐变背景 + 两张玻璃卡：深浅两套各出一张，用来肉眼验收背景的质感。
      *
      * 这里**画背景而不是挂 BackgroundLayer**：后者有一圈「玻璃扫光」的 withFrameNanos 循环，
@@ -135,7 +157,7 @@ class ScreenRenderTest {
 
     @Test
     fun `试一试页能渲染`() {
-        rule.setContent { TrialScreen(store, 0.92f) }
+        page { TrialScreen(store, 0.92f) }
         rule.onNodeWithText("试一试").assertExists()
         rule.onNodeWithText("生成候选回复").assertExists()
         capture("trial")
@@ -143,7 +165,7 @@ class ScreenRenderTest {
 
     @Test
     fun `设置页能渲染 且含玻璃效果三档`() {
-        rule.setContent { SettingsScreen(store, store.load(), {}, {}) }
+        page { SettingsScreen(store, store.load(), {}, {}) }
         rule.onNodeWithText("外观").assertExists()
         rule.onNodeWithText("玻璃效果", substring = true).assertExists()
         rule.onNodeWithText("自动").assertExists()
@@ -152,7 +174,7 @@ class ScreenRenderTest {
 
     @Test
     fun `高级设置能渲染 且含生成模式开关`() {
-        rule.setContent { AdvancedScreen(store, store.load(), {}, {}, {}, {}) }
+        page { AdvancedScreen(store, store.load(), {}, {}, {}, {}) }
         rule.onNodeWithText("生成模式").assertExists()
         // 两个模式都在（用 pill 的文案断言；输入框的 label 不在语义树的文字里）
         rule.onNodeWithText("直通（一套接口）").assertExists()
@@ -177,11 +199,17 @@ class ScreenRenderTest {
             .apply()
         store.save(store.load().copy(whitelistEnabled = true, whitelist = setOf("老张")))
 
-        rule.setContent { ChatCandidatesScreen(store, store.load(), {}, {}) }
+        page { ChatCandidatesScreen(store, store.load(), {}, {}) }
         rule.onNodeWithText("拉取到的联系人").assertExists()
         rule.onNodeWithText("拉取会话列表").assertExists()
         rule.onNodeWithText("还没加进去的（2）").assertExists()
         rule.onNodeWithText("已经在白名单里的（1）").assertExists()
         capture("chat-candidates")
+    }
+    @Test
+    fun `高级设置 深色能渲染`() {
+        page(dark = true) { AdvancedScreen(store, store.load(), {}, {}, {}, {}) }
+        rule.onNodeWithText("生成模式").assertExists()
+        capture("advanced-dark")
     }
 }
