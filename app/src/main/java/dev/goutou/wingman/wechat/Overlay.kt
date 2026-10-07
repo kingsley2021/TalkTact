@@ -110,8 +110,23 @@ internal class Panel(private val a: Activity) {
     private var cardTop = -1
     private var lastCallAt = 0L
     private var lastFingerprint = ""
+    /** 这一屏最后解析出来的消息 —— 点按钮要「摆出缓存」时拿它渲染（[onChipClick] 的 ③）。 */
+    private var lastMsgs: List<ChatMsg> = emptyList()
     private var skipSensitiveFor = ""
-    /** 折叠 / 展开。默认折叠 —— 不打开的话，脸上就只有一个小按钮。 */
+    /**
+     * 折叠 / 展开（默认折叠 —— 不打开的话，脸上就只有一个小按钮）。
+     *
+     * ⚠️ **只有三处允许改动它**：
+     * ① 用户自己点 —— 折叠按钮 [onChipClick] 或卡片右上角那个 ▾；
+     * ② 离开现场 —— [hideAll]（不在聊天页 / 总开关关着）与 [onPause]；
+     * ③ 换会话（上一屏的内容已经不属于这里）。
+     *
+     * 为什么要把这条写成规矩：tick 每 900ms 跑一轮，里面有一堆「这一屏没什么可展示的」分支
+     * （最后一条是我发的 / 读不到文字 / 白名单外…）。这些分支以前都顺手 `setExpanded(false)`，
+     * 于是**用户刚把卡片点开，下一轮就被自己的状态机收走** —— 看起来就是「点开又自动关闭」，
+     * 偏偏在「没什么可回」的那几屏最容易复现。现在它们改走 [showIdle]：只换内容与按钮文案，
+     * 收不收由用户自己决定。
+     */
     private var expanded = false
     /** 卡片里现在是不是一份「能看的结果」（候选回复 / 敏感拦截）。不是的话，点按钮该去重新识别。 */
     private var hasResult = false
@@ -472,6 +487,9 @@ internal class Panel(private val a: Activity) {
             lastCallAt = 0L
             skipSensitiveFor = ""
             hasResult = false
+            // 换了会话（或提示词 / 档案变了）：上一屏的内容已经不属于这里 ——
+            // 这是少数几处「替用户收」的地方之一，不收就会拿着别人的结果改这条消息。
+            setExpanded(false)
             showIdle()
         }
         val historyRevision = conversationDigest(*profile?.msgs.orEmpty().map {
@@ -535,7 +553,10 @@ internal class Panel(private val a: Activity) {
                     isError = true,
                 )
             } else {
-                showIdle()
+                showIdle(
+                    "这个聊天还没读到文字（正文可能是自绘控件）。\n" +
+                        "已经让微信重绑一次，等一两秒；还不行就把 App 首页的「诊断」发我。",
+                )
             }
             return
         }
@@ -568,7 +589,18 @@ internal class Panel(private val a: Activity) {
                     isError = true,
                 )
             } else {
-                showIdle()
+                // 按钮文案跟着 showIdle 一起写：以前 setChip 写完之后立刻被 showIdle 覆盖成「↻ 识别」，
+                // 于是「白名单外」这几个字其实从没在按钮上停住过。
+                showIdle(
+                    if (chatName.isBlank()) {
+                        "白名单开着，但这个会话的名字没认出来 → 先不分析。\n" +
+                            "要在这里用：去「设置 → 高级设置 → 会话白名单」按名字手动加一个。"
+                    } else {
+                        "「$chatName」不在白名单里 —— 按你的设置，这一屏不分析。\n" +
+                            "想让它工作就把它加进白名单；想全都分析，把白名单开关关掉。"
+                    },
+                    chip = if (chatName.isBlank()) "白名单 · 认不出会话名" else "白名单外 · 未启用",
+                )
             }
             return
         }
@@ -585,15 +617,17 @@ internal class Panel(private val a: Activity) {
             )
             return
         }
-        // 最后一条是我发的：没什么可回的，收起卡片（按钮留在场上，点一下就是重新识别）
+        // 最后一条是我发的：没什么可回的。卡片开着就只把说明换掉，**不替用户收**（见 [expanded] 的规矩）
         if (msgs.last().fromMe) {
-            Trace.note("方向", "最后一条是我发的 → 没什么可回，收起卡片")
-            showIdle()
+            Trace.note("方向", "最后一条是我发的 → 没什么可回，只更新按钮与卡片说明")
+            showIdle("最后一条是你发的 —— 这条没什么可回，收到新消息时这里会自动更新。")
             return
         }
         val roleContext = roleContextFor(chatName, msgs)
         val requestKey = conversationRequestKey(chatName, settings, roleContext, msgs)
         lastFingerprint = requestKey
+        // 留着这一屏的消息：点按钮要「摆出缓存」时用它渲染历史行（[onChipClick] 的 ③）
+        lastMsgs = msgs
         if (rewriteBusy) return
         if (busy) {
             if (pendingRequestKey == requestKey) return
@@ -1293,28 +1327,52 @@ internal class Panel(private val a: Activity) {
     }
 
     /**
-     * 点按钮：开着就收起；有结果就打开；什么都没有就去识别一次。
+     * 点按钮：开着就收起；有内容就打开；都没有才去识别一次（判定见纯函数 [chipTap]）。
      *
-     * 正在调接口时不重新发请求 —— 那会把这一轮的结果丢掉，等于白烧一次 token；
-     * 这时点一下只是把卡片打开看进度。
+     * 这几步都在尽量不烧 token、也不动用户的折叠意图：
+     * ① 卡片开着 → 收起（用户自己点的，允许）；
+     * ② 正在调接口 / 手上就有结果 → 直接打开（看进度或看结果）；
+     * ③ **这一屏问过、缓存里那份结果还在 → 直接摆出来**（fromCache，不重新调模型）；
+     * ④ 都没有 → 打开卡片 + 重新识别一次（开着才有进度可看，不然就是「点了没反应」）。
+     *
+     * ⚠️ ③ 以前是缺的：按钮一律走 [regenerate]，而它会**先把缓存删掉**再去问一次模型 ——
+     * 于是「有缓存可看」的那一屏点一下等于白烧一次 token，还要等模型回来才有内容。
      */
     private fun onChipClick() {
-        if (expanded) {
-            setExpanded(false)
-            return
+        when (chipTap(expanded, busy, hasResult, cache.containsKey(lastFingerprint))) {
+            ChipTap.Collapse -> setExpanded(false)
+            ChipTap.Expand -> setExpanded(true)
+            ChipTap.Restore -> {
+                val cached = cache[lastFingerprint] ?: return
+                Trace.note("缓存", "点按钮：这一屏的结果还在缓存里，直接摆出来（不重新调模型）")
+                setExpanded(true)
+                render(cached, lastMsgs, fromCache = true)
+            }
+            ChipTap.Regenerate -> {
+                // 先把卡片打开：重新识别要等模型，开着才有「正在读这一屏」可看
+                setExpanded(true)
+                regenerate()
+            }
         }
-        if (busy || hasResult) {
-            setExpanded(true)
-            return
-        }
-        regenerate()
     }
 
-    /** 这一屏没什么可展示的：收起卡片，按钮留在场上（点一下就是重新识别）。 */
-    private fun showIdle() {
+    /**
+     * 这一屏没什么可展示的（最后一条是我发的 / 读不到文字 / 白名单外…）。
+     *
+     * [reason] 只在**卡片已经开着**的时候写进正文（折叠着就不用说这么多）；[chip] 是折叠按钮上的字。
+     *
+     * ⚠️ 这里**不收起卡片**（见 [expanded] 上那条规矩）：以前它就是 `setExpanded(false)`，
+     * 也就是「点开又自动关闭」的来源。要收，用户点 ▾；离开聊天页时 [hideAll] 会收。
+     */
+    private fun showIdle(reason: String = "", chip: String = "↻ 识别") {
         hasResult = false
-        setExpanded(false)
-        setChip("↻ 识别")
+        setChip(chip)
+        if (!expanded || reason.isBlank()) return
+        // 卡片开着：就地换成一句说明，别把它抽走（抽走就是「自动关闭」）
+        title.text = "军师 · 待命"
+        title.setTextColor(colorAccent)
+        bodyBox.removeAllViews()
+        bodyBox.addView(label(reason, 13f, colorSub))
     }
 
     /** 正在调接口：按钮上就能看出来，默认不摊开卡片打扰人（但展开着的那份也同步成进度）。 */
@@ -1392,3 +1450,28 @@ internal class Panel(private val a: Activity) {
 
 /** 「被动收集会话名」的最小间隔：那一屏每 2.6 秒 tick 一次，没必要次次都读整棵视图树。 */
 private const val CONV_PULL_MIN_MS = 15_000L
+
+/**
+ * 「点一下聊天页那个折叠按钮」该干什么。
+ *
+ * 抽成纯函数是为了能单测 —— 这段判断以前写在 [Panel.onChipClick] 里，
+ * 「缓存里有结果却去重新调模型」那个 bug 就藏在这儿（见 [chipTap] 的注释）。
+ */
+enum class ChipTap { Collapse, Expand, Restore, Regenerate }
+
+/**
+ * 点折叠按钮的判定（纯函数，单测见 ChipTapTest）。
+ *
+ * 顺序：开着 → 收起；有进度或结果 → 打开；**缓存里还有这一屏的结果 → 直接摆出来**；
+ * 都没有 → 重新识别。
+ *
+ * ⚠️ 第三档是补上的：以前只有「有结果」和「重新识别」两档，而「缓存里有结果、手上没有」
+ * 这一档（hasResult 会被换会话 / 读不到文字那些分支清掉，缓存却还在）落进了「重新识别」——
+ * 点一下等于白删缓存、白烧一次 token，还要等模型回来，看着就像「点了没反应」。
+ */
+fun chipTap(expanded: Boolean, busy: Boolean, hasResult: Boolean, hasCache: Boolean): ChipTap = when {
+    expanded -> ChipTap.Collapse
+    busy || hasResult -> ChipTap.Expand
+    hasCache -> ChipTap.Restore
+    else -> ChipTap.Regenerate
+}
