@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.text.font.FontWeight
@@ -22,12 +23,13 @@ import dev.goutou.wingman.config.ConfigStore
 import dev.goutou.wingman.config.Keys
 import dev.goutou.wingman.config.PREF_NAME
 import dev.goutou.wingman.ui.AdvancedScreen
-import dev.goutou.wingman.ui.BackgroundLayer
 import dev.goutou.wingman.ui.ChatCandidatesScreen
 import dev.goutou.wingman.ui.GlassCard
+import dev.goutou.wingman.ui.GlassQuality
 import dev.goutou.wingman.ui.GoutouTheme
 import dev.goutou.wingman.ui.SettingsScreen
 import dev.goutou.wingman.ui.TrialScreen
+import dev.goutou.wingman.ui.drawBackdropArt
 import dev.goutou.wingman.ui.rememberBackdrop
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -89,12 +91,21 @@ class ScreenRenderTest {
         assertTrue("截图没写出来：$file", file.length() > 0)
     }
 
-    /** 背景层 + 两张玻璃卡：深浅两套各出一张，用来肉眼验收「内置渐变背景」的质感。 */
+    /**
+     * 内置渐变背景 + 两张玻璃卡：深浅两套各出一张，用来肉眼验收背景的质感。
+     *
+     * 这里**画背景而不是挂 BackgroundLayer**：后者有一圈「玻璃扫光」的 withFrameNanos 循环，
+     * 会让测试永远等不到 idle（AppNotIdleException）。背景本身是纯绘制，直接调就好。
+     */
     private fun renderBackdrop(name: String) {
         rule.setContent {
             GoutouTheme {
-                Box(Modifier.fillMaxSize()) {
-                    BackgroundLayer(rememberBackdrop(bgUri = "", dim = 0f, blur = 24f))
+                val backdrop = rememberBackdrop(bgUri = "", dim = 0f, blur = 24f)
+                Box(
+                    Modifier.fillMaxSize().drawBehind {
+                        drawBackdropArt(backdrop, size.width, size.height, GlassQuality.HIGH)
+                    },
+                ) {
                     Column(Modifier.fillMaxSize().padding(18.dp)) {
                         GlassCard(0.92f) {
                             Text("运行状态", fontSize = 15.sp, fontWeight = FontWeight.Medium)

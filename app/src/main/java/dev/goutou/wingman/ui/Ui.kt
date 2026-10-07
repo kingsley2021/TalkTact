@@ -383,7 +383,9 @@ fun GoutouTheme(content: @Composable () -> Unit) {
  *
  * 用户在设置里选了自己的图就以他的图为准，装饰层会被盖住，索性不画。
  */
-private fun DrawScope.drawBackdropArt(
+// internal 而不是 private：截图回归要**直接**调它。
+// 走 BackgroundLayer 不行 —— 那里面有一圈 withFrameNanos 的扫光，Compose 测试会永远等不到 idle。
+internal fun DrawScope.drawBackdropArt(
     b: Backdrop,
     w: Float,
     h: Float,
