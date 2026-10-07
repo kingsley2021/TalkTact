@@ -13,3 +13,6 @@ keystore/
 .idea/
 captures/
 .cxx/
+
+# 正式版留档：唯一允许入库的 APK（见 release/README.md）
+!release/*.apk
