@@ -789,6 +789,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
     var importing by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     var dialog by remember { mutableStateOf<String?>(null) }
+    var confirmReset by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     // 「有没有还没保存的改动」= 草稿提示词和**上次落盘的那份**比（跟「外观」「高级设置」同一套判据）。
     // 不能只看一个「保存过没有」的标志 —— 刚进页面它就说你没保存，红字等于天天亮着。
@@ -867,6 +868,64 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                 }
             }
         } else {
+            GroupTitle("当前军师")
+            // 「当前军师」是当前生效的状态，不能藏起来 —— 所以它是一张常驻卡，放在最前面；
+            // 换 skill 的入口收进下面的「Skill 库」分组，全页最多一层折叠。
+            GlassCard(glassAlpha) {
+                val src = BUILT_IN_SKILLS.firstOrNull { it.id == cfg.skillId }
+                val canReset = src != null && text != src.prompt
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(skillName(cfg.skillId), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                            Spacer(Modifier.width(8.dp))
+                            SourceChip(cfg.skillId)
+                        }
+                        Text(
+                            "${text.length} 字 · " +
+                                if (text.contains("replies")) "含 JSON 契约" else "⚠ 缺少 JSON 契约",
+                            fontSize = 12.sp,
+                            color = if (text.contains("replies")) palette.sub else palette.warn,
+                        )
+                    }
+                    if (canReset) {
+                        TextButton(onClick = { confirmReset = true }) { Text("重置") }
+                    }
+                    TextButton(onClick = { tweak = !tweak }) { Text(if (tweak) "收起" else "微调") }
+                }
+                Spacer(Modifier.height(6.dp))
+                // 这里只给「这是什么」；真要逐字看/改，点右上那个「微调」—— 那块才是编辑区。
+                HintText(
+                    src?.summary ?: text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty(),
+                    fontSize = 11.sp,
+                    color = palette.sub,
+                )
+                if (tweak) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp),
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    if (dirty) {
+                        Text("未保存，你所做出的改动不会被保存", fontSize = 11.sp, color = palette.bad)
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    Button(
+                        onClick = {
+                            // 内容跟哪个内置 skill 逐字一样，就还算那个 skill；动过了才算「自定义」
+                            val known = BUILT_IN_SKILLS.firstOrNull { it.prompt == text }?.id
+                            persist(text, known ?: "custom", unlimited = true)
+                        },
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
+                    ) { Text(if (dirty) "保存" else "已保存") }
+                }
+            }
+
+            GroupTitle("Skill 库")
             FoldCard(
                 title = "内置 skill",
                 summary = "当前是「${skillName(cfg.skillId)}」· 点开可换",
@@ -956,46 +1015,6 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                     Text(it, fontSize = 12.sp, color = if (it.startsWith("导入成功")) palette.ok else palette.bad)
                 }
             }
-
-            // 这块以前是一整屏的提示词输入框，长得跟上面「新手设置」几乎一模一样 ——
-            // 切到进阶后往下滑，会以为新手的内容没关掉。现在默认收起，要看再点开。
-            GlassCard(glassAlpha) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("当前军师", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
-                        Text(
-                            "${skillName(cfg.skillId)} · ${text.length} 字 · " +
-                                if (text.contains("replies")) "含 JSON 契约" else "⚠ 缺少 JSON 契约",
-                            fontSize = 12.sp,
-                            color = if (text.contains("replies")) palette.sub else palette.warn,
-                        )
-                    }
-                    TextButton(onClick = { tweak = !tweak }) { Text(if (tweak) "收起" else "微调提示词") }
-                }
-                if (tweak) {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = text,
-                        onValueChange = { text = it },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp),
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    if (dirty) {
-                        Text("未保存，你所做出的改动不会被保存", fontSize = 11.sp, color = palette.bad)
-                        Spacer(Modifier.height(6.dp))
-                    }
-                    Button(
-                        onClick = {
-                            // 内容跟哪个内置 skill 逐字一样，就还算那个 skill；动过了才算「自定义」
-                            val known = BUILT_IN_SKILLS.firstOrNull { it.prompt == text }?.id
-                            persist(text, known ?: "custom", unlimited = true)
-                        },
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-                    ) { Text(if (dirty) "保存" else "已保存") }
-                }
-            }
         }
     }
 
@@ -1005,6 +1024,24 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
             confirmButton = { TextButton(onClick = { dialog = null }) { Text("好") } },
             title = { Text("进阶设置") },
             text = { Text(msg) },
+        )
+    }
+
+    // 重置是**不可逆**的（改过的那份不留备份），所以先问一句再动。
+    if (confirmReset) {
+        val target = BUILT_IN_SKILLS.firstOrNull { it.id == cfg.skillId }
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmReset = false
+                    target?.let { persist(it.prompt, it.id, unlimited = true) }
+                    tweak = false
+                }) { Text("重置") }
+            },
+            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("取消") } },
+            title = { Text("重置提示词") },
+            text = { Text("把提示词恢复成「${skillName(cfg.skillId)}」的原版内容。你改过的那一份不会留备份。") },
         )
     }
 }
@@ -1204,6 +1241,24 @@ private fun GroupTitle(text: String) {
         fontWeight = FontWeight.Medium,
         color = palette.sub.copy(alpha = 0.75f),
         letterSpacing = 0.8.sp,
+    )
+}
+
+/**
+ * 来源小标签：一眼看出这份提示词是「内置」的还是「导入 / 自定义」的。
+ * 只做染色 + 一个词，不占语义 —— 「现在到底生效的是哪一份」由旁边的名字负责。
+ */
+@Composable
+private fun SourceChip(skillId: String) {
+    val palette = LocalPalette.current
+    Text(
+        if (skillId == "custom") "导入 / 自定义" else "内置",
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(palette.primary.copy(alpha = 0.14f))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        fontSize = 11.sp,
+        color = palette.primary,
     )
 }
 
