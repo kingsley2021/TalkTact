@@ -5,17 +5,30 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.view.View
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.goutou.wingman.config.ConfigStore
 import dev.goutou.wingman.config.Keys
 import dev.goutou.wingman.config.PREF_NAME
 import dev.goutou.wingman.ui.AdvancedScreen
+import dev.goutou.wingman.ui.BackgroundLayer
 import dev.goutou.wingman.ui.ChatCandidatesScreen
+import dev.goutou.wingman.ui.GlassCard
+import dev.goutou.wingman.ui.GoutouTheme
 import dev.goutou.wingman.ui.SettingsScreen
 import dev.goutou.wingman.ui.TrialScreen
+import dev.goutou.wingman.ui.rememberBackdrop
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -74,6 +87,40 @@ class ScreenRenderTest {
         val file = File(dir, "$name.png")
         FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         assertTrue("截图没写出来：$file", file.length() > 0)
+    }
+
+    /** 背景层 + 两张玻璃卡：深浅两套各出一张，用来肉眼验收「内置渐变背景」的质感。 */
+    private fun renderBackdrop(name: String) {
+        rule.setContent {
+            GoutouTheme {
+                Box(Modifier.fillMaxSize()) {
+                    BackgroundLayer(rememberBackdrop(bgUri = "", dim = 0f, blur = 24f))
+                    Column(Modifier.fillMaxSize().padding(18.dp)) {
+                        GlassCard(0.92f) {
+                            Text("运行状态", fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                            Text("内置渐变背景 + 玻璃卡片", fontSize = 12.sp)
+                        }
+                        GlassCard(0.92f) {
+                            Text("军师", fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                            Text("长提示折叠", fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+        rule.onNodeWithText("内置渐变背景 + 玻璃卡片").assertExists()
+        capture(name)
+    }
+
+    @Test
+    fun `内置渐变背景能渲染 浅色`() {
+        renderBackdrop("background-light")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi+night")
+    fun `内置渐变背景能渲染 深色`() {
+        renderBackdrop("background-dark")
     }
 
     @Test

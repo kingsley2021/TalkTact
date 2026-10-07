@@ -97,7 +97,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.goutou.wingman.ModuleStatus
-import dev.goutou.wingman.R
 import dev.goutou.wingman.config.ConfigData
 import dev.goutou.wingman.config.RemoteSync
 import dev.goutou.wingman.config.ConfigStore
@@ -125,7 +124,21 @@ data class Palette(
     val warn: Color,
     val bad: Color,
     val bgTop: Color,
+    /** 底色渐变的中间那一段。三段比两段更像「光」，不会是平涂。 */
+    val bgMid: Color,
     val bgBottom: Color,
+    /** 左上角那团光晕：整块背景的「光源」，玻璃面板的高光顺着它来。alpha = 0 就是不要。 */
+    val bgGlow: Color,
+    val bgGlowAlpha: Float,
+    /** 上下两端的暗角：中间亮、两头沉，长列表滚到底也不飘。 */
+    val bgVignette: Color,
+    val bgVignetteAlpha: Float,
+    /** 星尘噪点：给纯渐变补一点颗粒，不然大屏上会有塑料感。 */
+    val bgGrain: Color,
+    val bgGrainAlpha: Float,
+    /** 微网格线：极淡，远看是织物纹理，近看才看得出是格子。只有最高档位才画。 */
+    val bgLine: Color,
+    val bgLineAlpha: Float,
     val glass: Color,
     val glassBorder: Color,
     val glassTopAlpha: Float,
@@ -141,8 +154,17 @@ private val LightPalette = Palette(
     ok = Color(0xFF1FA463),
     warn = Color(0xFFD9910A),
     bad = Color(0xFFD64545),
-    bgTop = Color(0xFFF3EEFC),
-    bgBottom = Color(0xFFE3E1F3),
+    bgTop = Color(0xFFF5F1FC),
+    bgMid = Color(0xFFEDE6FB),
+    bgBottom = Color(0xFFE7DFF7),
+    bgGlow = Color(0xFF7C3AED),
+    bgGlowAlpha = 0.10f,
+    bgVignette = Color(0xFF3B2E63),
+    bgVignetteAlpha = 0.07f,
+    bgGrain = Color(0xFF3A2C5E),
+    bgGrainAlpha = 0.030f,
+    bgLine = Color(0xFF7C3AED),
+    bgLineAlpha = 0.035f,
     glass = Color(0xFFFFFFFF),
     glassBorder = Color(0xB3FFFFFF),
     glassTopAlpha = 0.62f,
@@ -158,8 +180,17 @@ private val DarkPalette = Palette(
     ok = Color(0xFF4FD296),
     warn = Color(0xFFF0B95B),
     bad = Color(0xFFFF8A8A),
-    bgTop = Color(0xFF100F16),
-    bgBottom = Color(0xFF1B1926),
+    bgTop = Color(0xFF221439),
+    bgMid = Color(0xFF2B1B4D),
+    bgBottom = Color(0xFF1B1230),
+    bgGlow = Color(0xFF7C3AED),
+    bgGlowAlpha = 0.18f,
+    bgVignette = Color(0xFF000000),
+    bgVignetteAlpha = 0.28f,
+    bgGrain = Color(0xFFFFFFFF),
+    bgGrainAlpha = 0.022f,
+    bgLine = Color(0xFFFFFFFF),
+    bgLineAlpha = 0.028f,
     glass = Color(0xFF2A2734),
     glassBorder = Color(0x33FFFFFF),
     glassTopAlpha = 0.72f,
@@ -174,10 +205,21 @@ val LocalPalette = staticCompositionLocalOf { LightPalette }
  * 免得每个面板各自 produceState 重新解码一遍。
  */
 data class Backdrop(
+    /** 用户自选的背景图；为空 = 用程序化渐变（内置背景）。 */
     val bitmap: ImageBitmap?,
+    /** 只对自定义背景图生效的压暗强度。 */
     val dim: Float,
     val bgTop: Color,
+    val bgMid: Color,
     val bgBottom: Color,
+    val bgGlow: Color,
+    val bgGlowAlpha: Float,
+    val bgVignette: Color,
+    val bgVignetteAlpha: Float,
+    val bgGrain: Color,
+    val bgGrainAlpha: Float,
+    val bgLine: Color,
+    val bgLineAlpha: Float,
     val primary: Color,
     /** 玻璃面板背后的模糊半径（dp） */
     val blur: Dp,
@@ -187,8 +229,17 @@ val LocalBackdrop = staticCompositionLocalOf {
     Backdrop(
         bitmap = null,
         dim = 0f,
-        bgTop = Color(0xFFF3EEFC),
-        bgBottom = Color(0xFFE3E1F3),
+        bgTop = Color(0xFFF5F1FC),
+        bgMid = Color(0xFFEDE6FB),
+        bgBottom = Color(0xFFE7DFF7),
+        bgGlow = Color(0xFF7C3AED),
+        bgGlowAlpha = 0.10f,
+        bgVignette = Color(0xFF3B2E63),
+        bgVignetteAlpha = 0.07f,
+        bgGrain = Color(0xFF3A2C5E),
+        bgGrainAlpha = 0.030f,
+        bgLine = Color(0xFF7C3AED),
+        bgLineAlpha = 0.035f,
         primary = Color(0xFF7C3AED),
         blur = 24.dp,
     )
@@ -323,29 +374,126 @@ fun GoutouTheme(content: @Composable () -> Unit) {
  * 调用方负责先把坐标系平移到目标区域（面板）再裁剪，所以同一个函数既能画最底层背景，
  * 也能画出「面板背后那块背景」—— 后者再套一层折射 / 模糊就是真实的玻璃。
  *
- * 背景就是**一张图**：内置的默认图，或者用户在设置里自己选的那张（选了就以他的为准）。
- * 固定底色渐变永远压在最下面 —— 图还没解码完、或者某天换成一张很亮的图时，兜住文字对比度。
+ * 默认背景**不再是一张图**，而是程序化画出来的：底色渐变 + 左上光晕 + 上下暗角 +
+ * 星尘噪点 + 微网格。这么换掉有三个好处：
+ * - 安装包不再背着几百 KB 的大图，也不用每次进前台解码一遍；
+ * - 每一层都是矢量绘制，平板 / 折叠屏上不会糊；
+ * - 「面板背后做一次真实模糊」这条最贵的路径会自然短路（见 [GlassSurface]）——
+ *   纯渐变没有细节可模糊，跳过整整一次离屏渲染。
+ *
+ * 用户在设置里选了自己的图就以他的图为准，装饰层会被盖住，索性不画。
  */
-private fun DrawScope.drawBackdropArt(b: Backdrop, w: Float, h: Float) {
+private fun DrawScope.drawBackdropArt(
+    b: Backdrop,
+    w: Float,
+    h: Float,
+    quality: GlassQuality = GlassQuality.HIGH,
+) {
+    // ① 底色渐变（斜向）：永远画。图还没解码完、或者用户选了张很亮的图时，兜住文字对比度。
     drawRect(
-        brush = Brush.verticalGradient(listOf(b.bgTop, b.bgBottom), startY = 0f, endY = h),
+        brush = Brush.linearGradient(
+            colors = listOf(b.bgTop, b.bgMid, b.bgBottom),
+            start = Offset(w * 0.18f, 0f),
+            end = Offset(w * 0.82f, h),
+        ),
         topLeft = Offset.Zero,
         size = Size(w, h),
     )
 
-    val img = b.bitmap ?: return
-    // 等价于 ContentScale.Crop：按「铺满」的比例缩放后居中
-    val scale = max(w / img.width.toFloat(), h / img.height.toFloat())
-    val dw = (img.width * scale).roundToInt()
-    val dh = (img.height * scale).roundToInt()
-    drawImage(
-        image = img,
-        srcOffset = IntOffset.Zero,
-        srcSize = IntSize(img.width, img.height),
-        dstOffset = IntOffset(((w - dw) / 2f).roundToInt(), ((h - dh) / 2f).roundToInt()),
-        dstSize = IntSize(dw, dh),
-    )
-    drawRect(color = Color.Black.copy(alpha = b.dim), topLeft = Offset.Zero, size = Size(w, h))
+    val img = b.bitmap
+    if (img != null) {
+        // 用户自选的背景图：贴上去就完事。
+        // 等价于 ContentScale.Crop：按「铺满」的比例缩放后居中
+        val scale = max(w / img.width.toFloat(), h / img.height.toFloat())
+        val dw = (img.width * scale).roundToInt()
+        val dh = (img.height * scale).roundToInt()
+        drawImage(
+            image = img,
+            srcOffset = IntOffset.Zero,
+            srcSize = IntSize(img.width, img.height),
+            dstOffset = IntOffset(((w - dw) / 2f).roundToInt(), ((h - dh) / 2f).roundToInt()),
+            dstSize = IntSize(dw, dh),
+        )
+        // 压暗只对自定义图片开放：内置渐变本身已经调过明度，再压一层会连同配色一起糊掉
+        if (b.dim > 0f) {
+            drawRect(color = Color.Black.copy(alpha = b.dim), topLeft = Offset.Zero, size = Size(w, h))
+        }
+        return
+    }
+
+    // ② 左上角光晕 —— 整块背景的光源
+    if (b.bgGlowAlpha > 0f) {
+        drawRect(
+            brush = Brush.radialGradient(
+                colors = listOf(b.bgGlow.copy(alpha = b.bgGlowAlpha), Color.Transparent),
+                center = Offset(w * 0.72f, h * 0.12f),
+                radius = max(w * 1.10f, h * 0.55f),
+            ),
+            topLeft = Offset.Zero,
+            size = Size(w, h),
+        )
+    }
+
+    // ③ 上下暗角
+    if (b.bgVignetteAlpha > 0f) {
+        val v = b.bgVignette.copy(alpha = b.bgVignetteAlpha)
+        drawRect(
+            brush = Brush.verticalGradient(
+                0.00f to v,
+                0.26f to Color.Transparent,
+                0.74f to Color.Transparent,
+                1.00f to v,
+            ),
+            topLeft = Offset.Zero,
+            size = Size(w, h),
+        )
+    }
+
+    // 低档位到此为止：噪点和网格都算「细节」，弱机上省掉
+    if (quality == GlassQuality.LOW) return
+
+    // ④ 星尘噪点。
+    //    位置用的是**由尺寸算出来的确定性伪随机**：同一块屏幕永远画同一批点，
+    //    切页 / 重绘时不会闪，也就不需要 remember 一份点表。
+    if (b.bgGrainAlpha > 0f && w > 0f && h > 0f) {
+        var seed = ((w.toInt() * 31) xor (h.toInt() * 17)) or 1
+        fun next(): Float {
+            seed = seed * 1103515245 + 12345
+            return ((seed ushr 9) and 0x7FFF) / 32767f
+        }
+        val count = (w * h / 26_000f).toInt().coerceIn(48, 220)
+        val baseR = 0.55.dp.toPx()
+        val spanR = 1.20.dp.toPx()
+        repeat(count) {
+            val x = next() * w
+            val y = next() * h
+            val t = next()
+            drawCircle(
+                color = b.bgGrain.copy(alpha = b.bgGrainAlpha * (0.35f + 0.65f * t)),
+                radius = baseR + t * spanR,
+                center = Offset(x, y),
+            )
+        }
+    }
+
+    // ⑤ 微网格：只有最高档位才画。一格 34dp、颜色极淡。
+    if (quality == GlassQuality.HIGH && b.bgLineAlpha > 0f) {
+        val step = 34.dp.toPx()
+        if (step > 0f) {
+            val color = b.bgLine.copy(alpha = b.bgLineAlpha)
+            val stroke = 1.dp.toPx().coerceAtLeast(1f)
+            var x = 0f
+            while (x <= w) {
+                drawLine(color, Offset(x, 0f), Offset(x, h), stroke)
+                x += step
+            }
+            var y = 0f
+            while (y <= h) {
+                drawLine(color, Offset(0f, y), Offset(w, y), stroke)
+                y += step
+            }
+        }
+    }
 }
 
 /**
@@ -396,7 +544,7 @@ fun BackgroundLayer(backdrop: Backdrop) {
             .drawBehind {
                 val w = if (root.width > 0) root.width.toFloat() else size.width
                 val h = if (root.height > 0) root.height.toFloat() else size.height
-                drawBackdropArt(backdrop, w, h)
+                drawBackdropArt(backdrop, w, h, quality)
             },
     )
 }
@@ -411,13 +559,32 @@ private fun decodeImage(context: Context, uriStr: String): ImageBitmap? = try {
     null
 }
 
-/** 内置默认背景。跟着 APK 走，不要任何权限，也不会被系统清理掉。 */
-private val DEFAULT_BG_RES = R.drawable.bg_app
-
-private fun decodeRes(context: Context, resId: Int): ImageBitmap? = try {
-    BitmapFactory.decodeResource(context.resources, resId)?.asImageBitmap()
-} catch (t: Throwable) {
-    null
+/**
+ * 背景参数：把当前配色 + 用户设置拼成一份 [Backdrop]。
+ *
+ * 单独抽出来是因为**截图回归也要渲染同一份背景** —— 两个主题各出一张图，
+ * 免得测试里自己拼一套、跟线上跑的不是同一个东西。
+ */
+@Composable
+fun rememberBackdrop(bgUri: String, dim: Float, blur: Float): Backdrop {
+    val palette = LocalPalette.current
+    return Backdrop(
+        bitmap = decodeBackdrop(bgUri),
+        dim = dim,
+        bgTop = palette.bgTop,
+        bgMid = palette.bgMid,
+        bgBottom = palette.bgBottom,
+        bgGlow = palette.bgGlow,
+        bgGlowAlpha = palette.bgGlowAlpha,
+        bgVignette = palette.bgVignette,
+        bgVignetteAlpha = palette.bgVignetteAlpha,
+        bgGrain = palette.bgGrain,
+        bgGrainAlpha = palette.bgGrainAlpha,
+        bgLine = palette.bgLine,
+        bgLineAlpha = palette.bgLineAlpha,
+        primary = palette.primary,
+        blur = blur.dp,
+    )
 }
 
 @Composable
@@ -425,10 +592,8 @@ private fun decodeBackdrop(uriStr: String): ImageBitmap? {
     val context = LocalContext.current
     // 解码放到 IO 线程，避免切页时卡一下
     val bitmap by produceState<ImageBitmap?>(initialValue = null, uriStr) {
-        value = withContext(Dispatchers.IO) {
-            // 没选自定义背景 → 用内置那张。现在「默认背景」本身就是一张图了。
-            if (uriStr.isBlank()) decodeRes(context, DEFAULT_BG_RES) else decodeImage(context, uriStr)
-        }
+        // 没选自定义背景 → null，交给程序化渐变去画（这是默认路径）
+        value = if (uriStr.isBlank()) null else withContext(Dispatchers.IO) { decodeImage(context, uriStr) }
     }
     return bitmap
 }
@@ -498,7 +663,7 @@ fun GlassSurface(
                     .clipToBounds()
                     .drawBehind {
                         withTransform({ translate(-pos.x, -pos.y) }) {
-                            drawBackdropArt(backdrop, root.width.toFloat(), root.height.toFloat())
+                            drawBackdropArt(backdrop, root.width.toFloat(), root.height.toFloat(), quality)
                         }
                     },
             )
@@ -511,7 +676,7 @@ fun GlassSurface(
                     .clipToBounds()
                     .drawBehind {
                         withTransform({ translate(-pos.x, -pos.y) }) {
-                            drawBackdropArt(backdrop, root.width.toFloat(), root.height.toFloat())
+                            drawBackdropArt(backdrop, root.width.toFloat(), root.height.toFloat(), quality)
                         }
                     },
             )
@@ -729,6 +894,19 @@ fun formatTime(ts: Long): String =
 
 // ================= 主界面 =================
 
+/**
+ * 底栏五个 tab 的下标。
+ *
+ * 顺序就是「用得上的先后」：先看出没出问题 → 让军师给出怎么回 → 管角色的人设 →
+ * 实在想自己试一句才去「试一试」。设置永远最后。
+ * 常量而不是裸数字：改顺序时漏改一处是最容易犯的错，让编译器帮忙盯着。
+ */
+private const val TAB_STATUS = 0
+private const val TAB_MENTOR = 1
+private const val TAB_ROLES = 2
+private const val TAB_TRIAL = 3
+private const val TAB_SETTINGS = 4
+
 @Composable
 fun App(store: ConfigStore) {
     var tab by remember { mutableIntStateOf(0) }
@@ -747,16 +925,8 @@ fun App(store: ConfigStore) {
     }
 
     GoutouTheme {
-        val palette = LocalPalette.current
         var rootSize by remember { mutableStateOf(IntSize.Zero) }
-        val backdrop = Backdrop(
-            bitmap = decodeBackdrop(ui.bgUri),
-            dim = ui.bgDim,
-            bgTop = palette.bgTop,
-            bgBottom = palette.bgBottom,
-            primary = palette.primary,
-            blur = ui.glassBlur.dp,
-        )
+        val backdrop = rememberBackdrop(ui.bgUri, ui.bgDim, ui.glassBlur)
 
         val phase = remember { GlassPhase() }
         CompositionLocalProvider(
@@ -786,10 +956,10 @@ fun App(store: ConfigStore) {
                         },
                 ) {
                     when (tab) {
-                        0 -> StatusScreen(store) { tab = 1 }
-                        1 -> TrialScreen(store, ui.glassAlpha)
-                        2 -> MentorScreen(store, ui.glassAlpha) { ui = store.load() }
-                        3 -> RolesScreen(store, ui.glassAlpha, roleOpen) { roleOpen = it }
+                        TAB_STATUS -> StatusScreen(store) { tab = TAB_TRIAL }
+                        TAB_MENTOR -> MentorScreen(store, ui.glassAlpha) { ui = store.load() }
+                        TAB_ROLES -> RolesScreen(store, ui.glassAlpha, roleOpen) { roleOpen = it }
+                        TAB_TRIAL -> TrialScreen(store, ui.glassAlpha)
                         else -> when (settingsPage) {
                             1 -> AdvancedScreen(
                                 store = store,
@@ -825,8 +995,8 @@ fun App(store: ConfigStore) {
                 ) { next ->
                     // 离开这一栏就把二级页收掉：切走再回来应该回到列表，而不是停在上次那个二级页；
                     // 点自己这一栏也当成「退出二级页」。
-                    if (next != 3 || next == tab) roleOpen = null
-                    if (next != 4 || next == tab) settingsPage = 0
+                    if (next != TAB_ROLES || next == tab) roleOpen = null
+                    if (next != TAB_SETTINGS || next == tab) settingsPage = 0
                     tab = next
                 }
             }
@@ -861,9 +1031,9 @@ private fun NavBar(
     val haptics = LocalHapticFeedback.current
     val items = listOf(
         "运行状态" to Icons.Filled.Pets,
-        "试一试" to Icons.Filled.PlayArrow,
         "军师" to Icons.Filled.Edit,
         "角色" to Icons.Filled.Person,
+        "试一试" to Icons.Filled.PlayArrow,
         "设置" to Icons.Filled.Settings,
     )
 

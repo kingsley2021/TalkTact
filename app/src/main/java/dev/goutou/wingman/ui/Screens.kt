@@ -1064,14 +1064,11 @@ fun SettingsScreen(
             Slider(value = d.glassAlpha, onValueChange = { update(d.copy(glassAlpha = it)) }, valueRange = 0.3f..1f)
             Spacer(Modifier.height(4.dp))
             HintText(
-                "玻璃背景模糊：${d.glassBlur.toInt()}dp（面板背后是这张背景图的真实模糊，调到 0 就没有玻璃感了）",
+                "玻璃背景模糊：${d.glassBlur.toInt()}dp（面板背后做一次真实模糊；内置渐变背景没有细节可模糊，会自动跳过）",
                 fontSize = 12.sp,
                 color = palette.sub,
             )
             Slider(value = d.glassBlur, onValueChange = { update(d.copy(glassBlur = it)) }, valueRange = 0f..40f)
-            Spacer(Modifier.height(4.dp))
-            Text("背景压暗：${(d.bgDim * 100).toInt()}%", fontSize = 12.sp, color = palette.sub)
-            Slider(value = d.bgDim, onValueChange = { update(d.copy(bgDim = it)) }, valueRange = 0f..0.8f)
             Spacer(Modifier.height(4.dp))
             // 设备分级：把「自动」实际判成了哪一档直接写出来，省得猜为什么效果不一样
             val lowRamDevice = remember { isLowRamDevice(context) }
@@ -1112,11 +1109,19 @@ fun SettingsScreen(
                 if (d.bgUri.isNotBlank()) {
                     "已设置自定义背景：玻璃面板背后会对它做真实的背景模糊 + 折射。"
                 } else {
-                    "当前用的是内置背景图；选一张自己的图就会替换掉它，点「恢复默认背景」可以换回来。"
+                    "当前用的是内置渐变背景（跟随系统明暗自动切换，不是图片）；" +
+                        "选一张自己的图就会替换掉它，点「恢复默认背景」可以换回来。"
                 },
                 fontSize = 11.sp,
                 color = palette.sub,
             )
+            // 压暗只对自定义背景图开放：内置渐变本身已经调过明度，
+            // 再压一层会把配色一起糊掉，所以没选图时这个滑杆根本不出现。
+            if (d.bgUri.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text("背景压暗：${(d.bgDim * 100).toInt()}%", fontSize = 12.sp, color = palette.sub)
+                Slider(value = d.bgDim, onValueChange = { update(d.copy(bgDim = it)) }, valueRange = 0f..0.8f)
+            }
             Spacer(Modifier.height(14.dp))
             // 外观现在自己带一个保存按钮：接口那套已经搬进「高级设置」，别再共用一个「保存」了。
             // 滑杆是即时预览的，但**不点这个按钮就不会落盘** —— 红字挨着它。
