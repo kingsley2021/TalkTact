@@ -148,7 +148,7 @@ private fun FoldCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text(title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(summary, fontSize = 12.sp, color = palette.sub)
             }
             Icon(
@@ -235,7 +235,7 @@ private fun HeaderButton(text: String, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
         modifier = Modifier.height(36.dp),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(RadiusR1),
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
     ) { Text(text, fontSize = 13.sp, color = palette.primary) }
 }
@@ -250,7 +250,7 @@ private fun CheckRow(check: Check, glassAlpha: Float) {
     }
     // 状态行是顶层元素（直接躺在 LazyColumn 上），所以用玻璃面板：背后是真实的背景模糊
     GlassSurface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(RadiusR2),
         glassAlpha = glassAlpha,
         tintTop = 0.26f * glassAlpha,
         tintBottom = 0.18f * glassAlpha,
@@ -260,7 +260,7 @@ private fun CheckRow(check: Check, glassAlpha: Float) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(10.dp).clip(CircleShape).background(color))
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                Text(check.title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text(check.title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(check.desc, fontSize = 12.sp, color = palette.sub)
             }
             Text(check.level.label, fontSize = 12.sp, color = color, fontWeight = FontWeight.Medium)
@@ -284,7 +284,7 @@ private fun DetailToggle(
     val palette = LocalPalette.current
     val angle by animateFloatAsState(if (expanded) 180f else 0f, tween(180))
     GlassSurface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(RadiusR2),
         glassAlpha = glassAlpha,
         tintTop = 0.26f * glassAlpha,
         tintBottom = 0.18f * glassAlpha,
@@ -293,7 +293,7 @@ private fun DetailToggle(
     ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("详细状态", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("详细状态", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(summary, fontSize = 12.sp, color = palette.sub)
             }
             Icon(
@@ -396,7 +396,7 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                 HeaderButton("↻ 刷新") { tick++ }
                 Button(
                     onClick = onTrial,
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                     colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                 ) { Text("试聊") }
             }
@@ -477,7 +477,7 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
         }
         item {
             GlassCard(glass) {
-                Text("接口自检", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("接口自检", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "只看「连不连得上、要多久」：发一次最小请求（一句 ping、只让它回 1 个 token）。\n" +
                         "不拼当前 skill、也不看模型回了什么 —— 模型没按 JSON 回复算不上连接问题，" +
@@ -584,7 +584,7 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                             }
                         },
                         enabled = !probing,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(RadiusR2),
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                     ) { Text(if (probing) "测试中…" else "开始自检") }
                     Spacer(Modifier.width(10.dp))
@@ -676,7 +676,7 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
                 },
                 modifier = Modifier.fillMaxWidth().height(50.dp),
                 enabled = !loading,
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(RadiusR2),
                 colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
             ) { Text(if (loading) "思考中…" else "生成候选回复") }
         }
@@ -733,7 +733,7 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
                                     fontSize = 11.sp,
                                     color = palette.primary,
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(10.dp))
+                                        .clip(RoundedCornerShape(RadiusR1))
                                         .background(palette.primary.copy(alpha = 0.12f))
                                         .clickable(enabled = rewriting == null) {
                                             val old = suggestion?.replies?.getOrNull(index)?.text ?: return@clickable
@@ -857,12 +857,12 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                     OutlinedButton(
                         onClick = { text = ConfigData().prompt },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(RadiusR2),
                     ) { Text("恢复默认") }
                     Button(
                         onClick = { persist(text, "classic", unlimited = false) },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(RadiusR2),
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                     ) { Text(if (dirty) "保存" else "已保存") }
                 }
@@ -877,7 +877,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(skillName(cfg.skillId), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                            Text(skillName(cfg.skillId), fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                             Spacer(Modifier.width(8.dp))
                             SourceChip(cfg.skillId)
                         }
@@ -919,7 +919,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                             persist(text, known ?: "custom", unlimited = true)
                         },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(RadiusR2),
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                     ) { Text(if (dirty) "保存" else "已保存") }
                 }
@@ -941,7 +941,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                         Modifier
                             .fillMaxWidth()
                             .padding(top = 10.dp)
-                            .clip(RoundedCornerShape(16.dp))
+                            .clip(RoundedCornerShape(RadiusR2))
                             .background(palette.glassTint.copy(alpha = if (selected) 0.18f else 0.09f))
                             .clickable {
                                 store.save(store.load().copy(prompt = skill.prompt, skillId = skill.id, maxTokens = 0))
@@ -954,7 +954,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                             .padding(14.dp),
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(skill.name, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text, modifier = Modifier.weight(1f))
+                            Text(skill.name, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text, modifier = Modifier.weight(1f))
                             Text(
                                 if (selected) "使用中" else "启用",
                                 fontSize = 12.sp,
@@ -1007,7 +1007,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                     },
                     enabled = !importing && url.isNotBlank(),
                     modifier = Modifier.fillMaxWidth().height(48.dp),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                     colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                 ) { Text(if (importing) "导入中…" else "导入并启用") }
                 note?.let {
@@ -1095,7 +1095,7 @@ fun SettingsScreen(
         ScreenHeader("设置", "外观 · 高级设置 · 关于")
 
         GlassCard(d.glassAlpha) {
-            Text("外观", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("外观", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Spacer(Modifier.height(6.dp))
             Text("玻璃不透明度：${(d.glassAlpha * 100).toInt()}%", fontSize = 12.sp, color = palette.sub)
             Slider(value = d.glassAlpha, onValueChange = { update(d.copy(glassAlpha = it)) }, valueRange = 0.3f..1f)
@@ -1132,13 +1132,13 @@ fun SettingsScreen(
                 OutlinedButton(
                     onClick = { pickImage.launch(arrayOf("image/*")) },
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                 ) { Text("选择背景图") }
                 OutlinedButton(
                     onClick = { update(d.copy(bgUri = "")) },
                     enabled = d.bgUri.isNotBlank(),
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                 ) { Text("恢复默认背景") }
             }
             Spacer(Modifier.height(4.dp))
@@ -1174,7 +1174,7 @@ fun SettingsScreen(
                     Button(
                         onClick = { saveAppearance() },
                         modifier = Modifier.height(46.dp),
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(RadiusR2),
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                     ) { Text("保存外观") }
                 }
@@ -1182,14 +1182,14 @@ fun SettingsScreen(
                 Button(
                     onClick = { saveAppearance() },
                     modifier = Modifier.fillMaxWidth().height(50.dp),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                     colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                 ) { Text("已保存") }
             }
         }
 
         GlassCard(d.glassAlpha) {
-            Text("高级设置", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("高级设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             HintText(
                 "接口地址 / API Key / 模型、微信内自动分析（参考条数 · 最短间隔 · temperature · 敏感内容检查）、\n" +
                     "备份 / 迁移、诊断 —— 都在这一层里面。",
@@ -1200,7 +1200,7 @@ fun SettingsScreen(
             Button(
                 onClick = onOpenAdvanced,
                 modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(RadiusR2),
                 colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
             ) { Text("高级设置") }
         }
@@ -1254,7 +1254,7 @@ private fun SourceChip(skillId: String) {
     Text(
         if (skillId == "custom") "导入 / 自定义" else "内置",
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(RadiusR1))
             .background(palette.primary.copy(alpha = 0.14f))
             .padding(horizontal = 8.dp, vertical = 2.dp),
         fontSize = 11.sp,
@@ -1535,7 +1535,7 @@ fun AdvancedScreen(
                 },
             )
             Spacer(Modifier.height(10.dp))
-            Text("接口地址", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("接口地址", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = d.baseUrl,
@@ -1567,12 +1567,12 @@ fun AdvancedScreen(
                     onClick = { pullModels(second = false) },
                     enabled = !pulling,
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                 ) { Text(if (pulling) "拉取中…" else "从服务端拉取模型列表") }
                 if (models.isNotEmpty()) {
                     Spacer(Modifier.width(8.dp))
                     Box {
-                        OutlinedButton(onClick = { modelsOpen = true }, shape = RoundedCornerShape(14.dp)) {
+                        OutlinedButton(onClick = { modelsOpen = true }, shape = RoundedCornerShape(RadiusR2)) {
                             Text("选模型（${models.size}）")
                         }
                         DropdownMenu(expanded = modelsOpen, onDismissRequest = { modelsOpen = false }) {
@@ -1636,7 +1636,7 @@ fun AdvancedScreen(
         }
 
         GlassCard(d.glassAlpha) {
-            Text("本地代理（API Key 不出本应用）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("本地代理（API Key 不出本应用）", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Text(
                 "开启后：聊天内容先送到本机的 127.0.0.1，由这个 App 带上 Key 去调你的接口。\n" +
                     "注入到微信里的那段代码从此**拿不到 Key** —— 做法不是加密，是根本不给它。",
@@ -1754,7 +1754,7 @@ fun AdvancedScreen(
                             }
                         },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(RadiusR2),
                     ) { Text("测试代理") }
                     OutlinedButton(
                         onClick = {
@@ -1763,7 +1763,7 @@ fun AdvancedScreen(
                             proxyNote = "已换新 token（微信里下次识别生效）"
                         },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(RadiusR2),
                     ) { Text("换新 token") }
                 }
                 Spacer(Modifier.height(6.dp))
@@ -1792,7 +1792,7 @@ fun AdvancedScreen(
         GroupTitle("生成")
 
         GlassCard(d.glassAlpha) {
-            Text("生成模式", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("生成模式", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 GlassPill("直通（一套接口）", !d.graded, Modifier.weight(1f)) { saveGraded(false) }
@@ -1849,12 +1849,12 @@ fun AdvancedScreen(
                         onClick = { pullModels(second = true) },
                         enabled = !pulling2,
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(RadiusR2),
                     ) { Text(if (pulling2) "拉取中…" else "从服务端拉取模型列表（第二套）") }
                     if (models2.isNotEmpty()) {
                         Spacer(Modifier.width(8.dp))
                         Box {
-                            OutlinedButton(onClick = { models2Open = true }, shape = RoundedCornerShape(14.dp)) {
+                            OutlinedButton(onClick = { models2Open = true }, shape = RoundedCornerShape(RadiusR2)) {
                                 Text("选模型（${models2.size}）")
                             }
                             DropdownMenu(expanded = models2Open, onDismissRequest = { models2Open = false }) {
@@ -1903,7 +1903,7 @@ fun AdvancedScreen(
         GroupTitle("识别")
 
         GlassCard(d.glassAlpha) {
-            Text("图片文字识别（OCR）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("图片文字识别（OCR）", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Text(
                 "聊天里的图片会先在这台手机上认成文字，再和别的消息一起交给模型 —— " +
                     "截图、长图里的话也能被读懂。\n" +
@@ -2012,7 +2012,7 @@ fun AdvancedScreen(
                     Button(
                         onClick = { saveAll() },
                         modifier = Modifier.height(46.dp),
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(RadiusR2),
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                     ) { Text("保存") }
                 }
@@ -2020,14 +2020,14 @@ fun AdvancedScreen(
                 Button(
                     onClick = { saveAll() },
                     modifier = Modifier.fillMaxWidth().height(50.dp),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                     colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                 ) { Text("已保存（微信里下次识别即生效）") }
             }
         }
 
         GlassCard(d.glassAlpha) {
-            Text("会话白名单", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("会话白名单", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             // 白底说明卡放最上面：这一页最容易踩的坑（名字对不上、开关开着名单空着）先说清楚。
             // 白卡和玻璃卡刻意不同 —— 玻璃是界面的一部分，白卡是「贴上去的说明书」。
             WhiteCard {
@@ -2110,7 +2110,7 @@ fun AdvancedScreen(
                                 newChat = ""
                             }
                         },
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(RadiusR2),
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                     ) { Text("添加") }
                 }
@@ -2205,7 +2205,7 @@ fun AdvancedScreen(
                         whitelistNote = "已请求 · 回微信首页 / 通讯录停两秒，再回来这里看"
                     },
                     modifier = Modifier.height(44.dp),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                     colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                 ) { Text("拉取会话列表") }
                 Text(pullInfo, fontSize = 11.sp, color = palette.sub, modifier = Modifier.weight(1f))
@@ -2218,7 +2218,7 @@ fun AdvancedScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(RadiusR2))
                     .background(palette.primary.copy(alpha = 0.12f))
                     .clickable { onOpenCandidates() }
                     .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -2251,7 +2251,7 @@ fun AdvancedScreen(
                         fontSize = 12.sp,
                         color = palette.primary,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(RadiusR1))
                             .clickable {
                                 store.clearIgnored()
                                 ignoredCount = 0
@@ -2270,7 +2270,7 @@ fun AdvancedScreen(
         GroupTitle("维护与排障")
 
         GlassCard(d.glassAlpha) {
-            Text("备份 / 迁移", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("备份 / 迁移", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Text(
                 "换包名、换手机的时候用：导出成一个 json 文件，装好新的再导入回来。\n" +
                     "导入是合并：角色只覆盖同名的，备份里没有的会保留。",
@@ -2290,13 +2290,13 @@ fun AdvancedScreen(
                 Button(
                     onClick = { exportLauncher.launch(Backup.FILE_NAME) },
                     modifier = Modifier.weight(1f).height(48.dp),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                     colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                 ) { Text("导出配置") }
                 OutlinedButton(
                     onClick = { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
                     modifier = Modifier.weight(1f).height(48.dp),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                 ) { Text("导入配置") }
             }
             backupNote?.let {
@@ -2307,7 +2307,7 @@ fun AdvancedScreen(
             OutlinedButton(
                 onClick = { diagLauncher.launch("TalkTact-诊断包.zip") },
                 modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(RadiusR2),
             ) { Text("导出诊断包（.zip）") }
             Spacer(Modifier.height(4.dp))
             HintText(
@@ -2323,7 +2323,7 @@ fun AdvancedScreen(
         }
 
         GlassCard(d.glassAlpha) {
-            Text("诊断", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("诊断", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Text(
                 "某个聊天页连按钮都不弹、或者「运行状态」报错的时候用这里：\n" +
                     "让微信进程抓一次当前界面、看它真正发出去的那次调用，再复制出来发我。",
@@ -2334,7 +2334,7 @@ fun AdvancedScreen(
             Button(
                 onClick = onOpenDiag,
                 modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(RadiusR2),
                 colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
             ) { Text("进入诊断") }
         }
@@ -2412,7 +2412,7 @@ fun ChatCandidatesScreen(
 
         item {
             GlassCard(d.glassAlpha) {
-                Text("搜索", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("搜索", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "拉回来的名字可能有几十个 —— 输一两个字就能筛出来（只筛这一页的名单）。",
                     fontSize = 11.sp,
@@ -2459,7 +2459,7 @@ fun ChatCandidatesScreen(
                             note = "已请求 · 回微信首页 / 通讯录停两秒，再回来看"
                         },
                         modifier = Modifier.height(44.dp),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(RadiusR2),
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                     ) { Text("拉取会话列表") }
                     Text(pullInfo, fontSize = 11.sp, color = palette.sub, modifier = Modifier.weight(1f))
@@ -2608,7 +2608,7 @@ fun ChatCandidatesScreen(
                             fontSize = 12.sp,
                             color = palette.primary,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(RadiusR1))
                                 .clickable {
                                     store.clearIgnored()
                                     ignoredCount = 0
@@ -2647,7 +2647,7 @@ private fun GeoCard(store: ConfigStore, glassAlpha: Float) {
     }
 
     GlassCard(glassAlpha) {
-        Text("网络信息（归属地）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+        Text("网络信息（归属地）", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
         Text(
             "「运行状态 → 接口自检」里那两行省份，是拿 IP 去问第三方库要的 —— 这是整个模块唯一一处" +
                 "会把 IP 发给别人的地方。关掉之后自检只显示 IP，一次都不问。",
@@ -2682,7 +2682,7 @@ private fun GeoCard(store: ConfigStore, glassAlpha: Float) {
                 Button(
                     onClick = { saveGeoNow(d.geoEnabled, d.geoEndpoint) },
                     modifier = Modifier.height(42.dp),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                     colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                 ) { Text("保存地址") }
             }
@@ -2727,7 +2727,7 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
         GeoCard(store, glassAlpha)
 
         GlassCard(glassAlpha) {
-            Text("抓取微信界面", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("抓取微信界面", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Text(
                 "某些聊天页连卡片都不弹时用这个：先在微信里停在那个聊天页 → 切回这里点下面的按钮 → " +
                     "再切回微信（那个页面重新出现就会自动抓）→ 回来点「刷新」→ 复制下面的「诊断」发我。",
@@ -2738,7 +2738,7 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
                     onClick = { store.requestDiag(); diagAsked = true },
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                     colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                 ) { Text("抓当前微信界面") }
                 if (diagAsked) {
@@ -2749,7 +2749,7 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
 
         if (trace.isNotBlank()) {
             GlassCard(glassAlpha, border = palette.ok.copy(alpha = 0.45f)) {
-                Text("决策轨迹（每一轮读到什么、停在哪一步）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("决策轨迹（每一轮读到什么、停在哪一步）", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "更新于 ${formatTime(traceAt)} · 卡片不弹时先看它：注入侧每一轮都留一条，" +
                         "扫一眼就知道是卡在「找不到输入框」还是「最后一条是我发的」。它刻意不含聊天正文。",
@@ -2761,12 +2761,12 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = { clipboard.setText(AnnotatedString(trace)) },
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                 ) { Text("复制轨迹") }
             }
         } else {
             GlassCard(glassAlpha) {
-                Text("还没有轨迹", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("还没有轨迹", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "在微信里打开一个聊天页停一会儿，注入侧就会把判定记下来并自动回传；" +
                         "也可以点上面那个「抓当前微信界面」立刻带一份回来。",
@@ -2778,7 +2778,7 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
 
         if (diag.isNotBlank()) {
             GlassCard(glassAlpha, border = palette.warn.copy(alpha = 0.5f)) {
-                Text("诊断（来自微信进程）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("诊断（来自微信进程）", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "生成于 ${formatTime(diagAt)} · 排查「读不到消息 / 全是图片」时把它复制给对方",
                     fontSize = 12.sp,
@@ -2789,19 +2789,19 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = { clipboard.setText(AnnotatedString(diag)) },
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                 ) { Text("复制诊断") }
             }
         } else {
             GlassCard(glassAlpha) {
-                Text("还没有诊断", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("还没有诊断", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text("上面那个按钮抓过一次之后，微信进程会把界面结构留在这里。", fontSize = 12.sp, color = palette.sub)
             }
         }
 
         if (lastCall.isNotBlank()) {
             GlassCard(glassAlpha, border = palette.primary.copy(alpha = 0.45f)) {
-                Text("最近一次调用（注入侧真正发出去的）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("最近一次调用（注入侧真正发出去的）", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "发生于 ${formatTime(lastCallAt)} · 这里是微信进程实际拿去调接口的那一份，不是本 App 里的配置。" +
                         "核对「当前军师」有没有真的生效，看 system 长度那一行。",
@@ -2813,12 +2813,12 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = { clipboard.setText(AnnotatedString(lastCall)) },
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                 ) { Text("复制这一段") }
             }
         } else {
             GlassCard(glassAlpha) {
-                Text("还没有调用记录", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("还没有调用记录", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text("在微信里生成过一次候选回复之后，那份请求就会留在这里。", fontSize = 12.sp, color = palette.sub)
             }
         }
@@ -2870,7 +2870,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
         }
 
         GlassCard(glassAlpha) {
-            Text("这是干什么的", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("这是干什么的", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Text(
                 "模块会在你打开某个聊天页时，把读到的消息按联系人归档到这里（1 小时内重复的内容只留一条）。\n" +
                     "点进某个人，写上「TA 是你什么人」和「平时的关系」—— 这些会连同之前攒下的聊天记录一起，\n" +
@@ -2884,7 +2884,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
 
         if (roles.isEmpty()) {
             GlassCard(glassAlpha) {
-                Text("还没有记录", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("还没有记录", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "去微信里打开几个聊天页，每个停两三秒，再回来点「刷新」。\n" +
                         "（只在聊天页可见时读得到，所以记录是「你在场时看到的那几条」慢慢攒起来的。）",
@@ -3023,7 +3023,7 @@ private fun RoleDetail(
         }
 
         GlassCard(glassAlpha) {
-            Text("TA 是你什么人", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("TA 是你什么人", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             if (role.renamed) {
                 Text(
                     "（识别到的会话名是「${role.key}」，它负责匹配、不会被改动，所以改了名字以后消息还是记到这一条）",
@@ -3067,13 +3067,13 @@ private fun RoleDetail(
                     onChanged()
                 },
                 modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(RadiusR2),
                 colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
             ) { Text(if (dirty) "保存" else "已保存") }
         }
 
         GlassCard(glassAlpha) {
-            Text("记下来的聊天（${role.msgs.size} 条）", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+            Text("记下来的聊天（${role.msgs.size} 条）", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Text(
                 "时间是我「看到」它的时间，不是微信里那条消息的真实时间 —— 微信不给这条信息，" +
                     "而模块只在聊天页可见时读得到。生成回复时会带上最近 20 条（屏幕上已有的不再重复）。",
@@ -3102,7 +3102,7 @@ private fun RoleDetail(
                 onClick = { mergeOpen = true },
                 enabled = mergeCandidates.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth().height(46.dp),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(RadiusR2),
             ) { Text("把另一个角色合并进来") }
             Spacer(Modifier.height(4.dp))
             Text(
@@ -3124,12 +3124,12 @@ private fun RoleDetail(
                     onClick = { confirm = "clear" },
                     enabled = role.msgs.isNotEmpty(),
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                 ) { Text("清空记录") }
                 OutlinedButton(
                     onClick = { confirm = "remove" },
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(RadiusR2),
                 ) { Text("删除角色") }
             }
         }
@@ -3184,7 +3184,7 @@ private fun RoleDetail(
                             Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 2.dp)
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(RadiusR2))
                                 .clickable {
                                     mergeOpen = false
                                     pendingMerge = o
@@ -3282,7 +3282,7 @@ private fun SelfStyleDetail(store: ConfigStore, glassAlpha: Float) {
 
         item {
             GlassCard(glassAlpha) {
-                Text("这是干什么的", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = palette.text)
+                Text("这是干什么的", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "把「你自己发出去的话」攒起来，每天在你设定的时间交给模型提炼成一份说话风格档案。\n" +
                         "「军师」生成候选回复时会参考它 —— 回复就会更像你平时说话的样子。\n\n" +
@@ -3381,7 +3381,7 @@ private fun SelfStyleDetail(store: ConfigStore, glassAlpha: Float) {
                         modifier = Modifier
                             .padding(top = 4.dp)
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(RadiusR2))
                             .background(palette.glassTint.copy(alpha = 0.10f))
                             .padding(10.dp),
                     )
@@ -3510,7 +3510,7 @@ fun WhiteCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.()
     Column(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(RadiusR2))
             .background(Color.White)
             .padding(12.dp),
         content = content,
@@ -3554,7 +3554,7 @@ private fun PickRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(RadiusR1))
             .combinedClickable(
                 onClick = { if (picking) onToggle() },
                 onLongClick = onLongPress,
@@ -3580,7 +3580,7 @@ private fun PickRow(
                 fontSize = 12.sp,
                 color = actionColor,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(RadiusR1))
                     .clickable { onAction() }
                     .padding(horizontal = 8.dp, vertical = 4.dp),
             )
@@ -3609,7 +3609,7 @@ private fun PickBar(
             fontSize = 12.sp,
             color = palette.primary,
             modifier = Modifier
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(RadiusR1))
                 .clickable { onSelectAll() }
                 .padding(horizontal = 6.dp, vertical = 4.dp),
         )
@@ -3618,7 +3618,7 @@ private fun PickBar(
             fontSize = 12.sp,
             color = palette.sub,
             modifier = Modifier
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(RadiusR1))
                 .clickable { onCancel() }
                 .padding(horizontal = 6.dp, vertical = 4.dp),
         )
@@ -3629,14 +3629,14 @@ private fun PickBar(
             onClick = onPrimary,
             enabled = count > 0,
             modifier = Modifier.weight(1f).height(42.dp),
-            shape = RoundedCornerShape(14.dp),
+            shape = RoundedCornerShape(RadiusR2),
             colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
         ) { Text(primaryLabel, fontSize = 13.sp) }
         OutlinedButton(
             onClick = onDanger,
             enabled = count > 0,
             modifier = Modifier.weight(1f).height(42.dp),
-            shape = RoundedCornerShape(14.dp),
+            shape = RoundedCornerShape(RadiusR2),
         ) { Text(dangerLabel, fontSize = 12.sp, color = palette.bad) }
     }
 }

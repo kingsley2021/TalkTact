@@ -115,6 +115,19 @@ import kotlin.math.roundToInt
  * 「液态玻璃」= 面板后面压一块**真正被模糊过的背景**（Modifier.blur 走 RenderEffect）。
  * 因为 minSdk = 31（Android 12），这里不再需要低版本降级分支。
  */
+// ================= 设计 Token =================
+
+/**
+ * 圆角四档（界面改造批 4b，设计师规范）。
+ *
+ * **嵌套规则：内层 = 外层 − 6dp** —— 卡片里再套一个圆角块时别用同一个值，
+ * 否则两层圆角一样大，看起来是「套娃」而不是「嵌进去」。
+ */
+val RadiusR1 = 10.dp   // chip / 筛选胶囊 / 小按钮
+val RadiusR2 = 16.dp   // 输入框 / 列表行卡 / 普通按钮
+val RadiusR3 = 24.dp   // 标准卡片
+val RadiusR4 = 32.dp   // 顶部大面板 / 底部面板顶角
+
 data class Palette(
     val primary: Color,
     val soft: Color,
@@ -792,16 +805,16 @@ fun GlassCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     GlassSurface(
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(RadiusR3),
         glassAlpha = glassAlpha,
         borderColor = border,
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 5.dp)
+            .padding(horizontal = 20.dp, vertical = 8.dp)
             // 一点点外投影：让卡片从彩色背景上「浮」起来，而不是贴上去
-            .shadow(5.dp, RoundedCornerShape(22.dp), clip = false),
+            .shadow(5.dp, RoundedCornerShape(RadiusR3), clip = false),
     ) {
-        Column(Modifier.padding(16.dp), content = content)
+        Column(Modifier.padding(20.dp), content = content)
     }
 }
 
@@ -809,7 +822,7 @@ fun GlassCard(
 @Composable
 fun GlassPill(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val palette = LocalPalette.current
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(RadiusR1)
     Box(
         modifier
             .clip(shape)
@@ -849,7 +862,7 @@ fun ScreenHeader(title: String, sub: String, actions: @Composable RowScope.() ->
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 25.sp, fontWeight = FontWeight.Bold, color = palette.text)
+            Text(title, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Text(sub, fontSize = 12.sp, color = palette.primary)
         }
         actions()
@@ -861,7 +874,7 @@ fun StatCell(big: String, small: String, modifier: Modifier = Modifier) {
     val palette = LocalPalette.current
     Column(
         modifier
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(RadiusR2))
             .background(palette.glassTint.copy(alpha = 0.10f))
             .padding(vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1041,8 +1054,8 @@ fun App(store: ConfigStore) {
     }
 }
 
-private val NavShape = RoundedCornerShape(30.dp)
-private val NavIndicatorShape = RoundedCornerShape(20.dp)
+private val NavShape = RoundedCornerShape(RadiusR4)
+private val NavIndicatorShape = RoundedCornerShape(RadiusR3)
 private val NavBarHeight = 62.dp
 
 /**
@@ -1153,7 +1166,7 @@ private fun NavItem(
     Column(
         modifier
             .fillMaxHeight()
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(RadiusR3))
             // 自带指示块了，所以不要涟漪 —— 否则会闪出一个和指示块不重合的方块
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .graphicsLayer {
