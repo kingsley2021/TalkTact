@@ -176,6 +176,7 @@ private val LightPalette = Palette(
     glass = Color(0xFFFFFFFF),
     // L1 主面板：白 0.34 → 0.20（原来 0.62 → 0.42，几乎不透明）
     glassTint = Color(0xFFFFFFFF),
+    glassBorder = Color(0xB3FFFFFF),
     glassTopAlpha = 0.34f,
     glassBottomAlpha = 0.20f,
     dark = false,
@@ -203,6 +204,7 @@ private val DarkPalette = Palette(
     glass = Color(0xFF2A2734),
     // L1 主面板：白 0.16 → 0.08（深色下「白 0.08」就是设计师给的数）
     glassTint = Color(0xFFFFFFFF),
+    glassBorder = Color(0x33FFFFFF),
     glassTopAlpha = 0.16f,
     glassBottomAlpha = 0.08f,
     dark = true,
