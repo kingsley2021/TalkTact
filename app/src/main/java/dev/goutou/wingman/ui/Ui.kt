@@ -128,6 +128,24 @@ val RadiusR2 = 16.dp   // 输入框 / 列表行卡 / 普通按钮
 val RadiusR3 = 24.dp   // 标准卡片
 val RadiusR4 = 32.dp   // 顶部大面板 / 底部面板顶角
 
+/**
+ * 状态色令牌（界面改造批 4c）。
+ *
+ * 语义固定：绿 = 正常/安全，琥珀 = 注意，红 = 危险，紫 = 选中/主操作。
+ * **状态色只允许出现在这四种形态里**：
+ * ① 8dp 状态点（[StatusDot]）；② 13sp 文字；③ chip（[StatusChip]：底色 alpha [ChipBgAlpha] + 1dp 描边）；
+ * ④ 1dp 描边（卡片 / chip，alpha [CardBorderAlpha]）。
+ *
+ * 两条附加规矩：一屏最多一处「大面积」状态色（运行状态那张 hero 卡的空心圈，其余一律走上面四种形态）；
+ * **紫不承担「正常」语义** —— 正常 / 生效一律用绿，说不清就用 [Palette.sub]。
+ * 「颜色 + 文案」双通道：状态色永远跟一句说清楚的文字一起出现，不许只靠颜色区分。
+ */
+val StatusDotSize = 8.dp
+/** chip / 小标签的底色透明度（状态色或选中色 + 这一层 alpha 铺在玻璃上）。 */
+const val ChipBgAlpha = 0.14f
+/** 状态色 / 选中色的 1dp 描边透明度（批 4c 之前是 0.45 / 0.5 / 0.55 三档混用）。 */
+const val CardBorderAlpha = 0.35f
+
 data class Palette(
     val primary: Color,
     val soft: Color,
@@ -818,6 +836,34 @@ fun GlassCard(
     }
 }
 
+/**
+ * 状态点（批 4c）：8dp 圆点 —— 状态色最小的那个形态，永远跟一句说清楚的文字一起出现（双通道）。
+ * 颜色可以给状态色（绿 / 琥珀 / 红），也可以给选中色（紫）。
+ */
+@Composable
+fun StatusDot(color: Color, size: Dp = StatusDotSize) {
+    Box(Modifier.size(size).clip(CircleShape).background(color))
+}
+
+/**
+ * 状态 chip（批 4c）：底色 = 颜色 alpha [ChipBgAlpha]，1dp 描边 alpha [CardBorderAlpha]，13sp 文字。
+ * 需要「一眼看出状态、又不许铺一片色」的地方用它（[SourceChip] 也是它的一个用法）。
+ */
+@Composable
+fun StatusChip(text: String, color: Color) {
+    Text(
+        text,
+        modifier = Modifier
+            .clip(RoundedCornerShape(RadiusR1))
+            .background(color.copy(alpha = ChipBgAlpha))
+            .border(1.dp, color.copy(alpha = CardBorderAlpha), RoundedCornerShape(RadiusR1))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Medium,
+        color = color,
+    )
+}
+
 /** 玻璃胶囊（筛选、档位选择都用它）。它一般落在卡片里，所以只做染色、不再重复模糊。 */
 @Composable
 fun GlassPill(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
@@ -863,7 +909,7 @@ fun ScreenHeader(title: String, sub: String, actions: @Composable RowScope.() ->
     ) {
         Column(Modifier.weight(1f)) {
             Text(title, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
-            Text(sub, fontSize = 12.sp, color = palette.primary)
+            Text(sub, fontSize = 13.sp, color = palette.primary)
         }
         actions()
     }
@@ -880,7 +926,7 @@ fun StatCell(big: String, small: String, modifier: Modifier = Modifier) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(big, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = palette.text)
-        Text(small, fontSize = 11.sp, color = palette.sub)
+        Text(small, fontSize = 13.sp, color = palette.sub)
     }
 }
 

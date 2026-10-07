@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -119,6 +120,13 @@ private enum class Level(val label: String) { OK("通过"), WARN("待确认"), B
 
 private data class Check(val title: String, val desc: String, val level: Level, val onClick: (() -> Unit)? = null)
 
+/** 状态等级 → 状态色。批 4c：状态色只有这一个出口，别再各写一份 when。 */
+private fun levelColor(palette: Palette, level: Level): Color = when (level) {
+    Level.OK -> palette.ok
+    Level.WARN -> palette.warn
+    Level.BAD -> palette.bad
+}
+
 /**
  * 页面顶栏上的小按钮（返回 / 刷新）。
  *
@@ -149,7 +157,7 @@ private fun FoldCard(
         ) {
             Column(Modifier.weight(1f)) {
                 Text(title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
-                Text(summary, fontSize = 12.sp, color = palette.sub)
+                Text(summary, fontSize = 13.sp, color = palette.sub)
             }
             Icon(
                 Icons.Filled.ExpandMore,
@@ -217,7 +225,7 @@ private fun NetRow(label: String, value: String?, hint: String? = null) {
     val palette = LocalPalette.current
     val missing = value.isNullOrBlank()
     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, fontSize = 12.sp, color = palette.sub, modifier = Modifier.width(76.dp))
+        Text(label, fontSize = 13.sp, color = palette.sub, modifier = Modifier.width(76.dp))
         Column(Modifier.weight(1f)) {
             Text(value ?: "null", fontSize = 13.sp, color = if (missing) palette.warn else palette.text)
             if (!hint.isNullOrBlank()) Text(hint, fontSize = 10.sp, color = palette.sub)
@@ -243,11 +251,7 @@ private fun HeaderButton(text: String, onClick: () -> Unit) {
 @Composable
 private fun CheckRow(check: Check, glassAlpha: Float) {
     val palette = LocalPalette.current
-    val color = when (check.level) {
-        Level.OK -> palette.ok
-        Level.WARN -> palette.warn
-        Level.BAD -> palette.bad
-    }
+    val color = levelColor(palette, check.level)
     // 状态行是顶层元素（直接躺在 LazyColumn 上），所以用玻璃面板：背后是真实的背景模糊
     GlassSurface(
         shape = RoundedCornerShape(RadiusR2),
@@ -258,12 +262,13 @@ private fun CheckRow(check: Check, glassAlpha: Float) {
         onClick = check.onClick,
     ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(10.dp).clip(CircleShape).background(color))
+            // 批 4c：状态点统一 8dp（原来 10dp / 8dp 各写各的）
+            StatusDot(color)
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                 Text(check.title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
-                Text(check.desc, fontSize = 12.sp, color = palette.sub)
+                Text(check.desc, fontSize = 13.sp, color = palette.sub)
             }
-            Text(check.level.label, fontSize = 12.sp, color = color, fontWeight = FontWeight.Medium)
+            Text(check.level.label, fontSize = 13.sp, color = color, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -294,7 +299,7 @@ private fun DetailToggle(
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("详细状态", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
-                Text(summary, fontSize = 12.sp, color = palette.sub)
+                Text(summary, fontSize = 13.sp, color = palette.sub)
             }
             Icon(
                 Icons.Filled.ExpandMore,
@@ -402,27 +407,21 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
             }
         }
         item {
-            GlassCard(glass, border = when (overall) {
-                Level.OK -> palette.ok.copy(alpha = 0.5f)
-                Level.WARN -> palette.warn.copy(alpha = 0.5f)
-                Level.BAD -> palette.bad.copy(alpha = 0.5f)
-            }) {
+            val tone = levelColor(palette, overall)
+            GlassCard(glass, border = tone.copy(alpha = CardBorderAlpha)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 批 4c：不再铺一块 46dp 实心色 —— 淡底 + 1dp 描边 + 状态色符号。
+                    // 全屏「大面积」只留这一处，而且是空心的圈，红起来也不刺眼。
                     Box(
                         Modifier.size(46.dp).clip(CircleShape)
-                            .background(
-                                when (overall) {
-                                    Level.OK -> palette.ok
-                                    Level.WARN -> palette.warn
-                                    Level.BAD -> palette.bad
-                                },
-                            ),
+                            .background(tone.copy(alpha = ChipBgAlpha))
+                            .border(1.dp, tone.copy(alpha = CardBorderAlpha), CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             when (overall) { Level.OK -> "✓"; Level.WARN -> "!"; Level.BAD -> "✕" },
                             fontSize = 24.sp,
-                            color = androidx.compose.ui.graphics.Color.White,
+                            color = tone,
                             fontWeight = FontWeight.Bold,
                         )
                     }
@@ -435,7 +434,7 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                         )
                         Text(
                             "${checks.size} 项已检测 · 通过 $ok · 待确认 $warn · 有问题 $bad",
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             color = palette.sub,
                         )
                     }
@@ -482,7 +481,7 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                     "只看「连不连得上、要多久」：发一次最小请求（一句 ping、只让它回 1 个 token）。\n" +
                         "不拼当前 skill、也不看模型回了什么 —— 模型没按 JSON 回复算不上连接问题，" +
                         "那种情况去「试一试」页验证。",
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
 
@@ -590,13 +589,13 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
                     Spacer(Modifier.width(10.dp))
                     Text(
                         probeVerdict ?: "",
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         color = if (probeOk) palette.ok else palette.bad,
                     )
                 }
                 probeDetail?.let {
                     Spacer(Modifier.height(4.dp))
-                    Text(it, fontSize = 11.sp, color = palette.sub)
+                    Text(it, fontSize = 13.sp, color = palette.sub)
                 }
             }
         }
@@ -629,7 +628,7 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
             )
             if (hits.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
-                Text("⚠ 含敏感内容：${hits.joinToString("、")}（微信里会先问你一次）", fontSize = 12.sp, color = palette.warn)
+                Text("⚠ 含敏感内容：${hits.joinToString("、")}（微信里会先问你一次）", fontSize = 13.sp, color = palette.warn)
             }
             Spacer(Modifier.height(10.dp))
             Button(
@@ -680,48 +679,49 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
                 colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
             ) { Text(if (loading) "思考中…" else "生成候选回复") }
         }
-        error?.let { msg -> GlassCard(glassAlpha, border = palette.bad.copy(alpha = 0.5f)) { Text(msg, color = palette.bad, fontSize = 13.sp) } }
-        info?.let { GlassCard(glassAlpha) { Text(it, fontSize = 12.sp, color = palette.sub) } }
+        error?.let { msg -> GlassCard(glassAlpha, border = palette.bad.copy(alpha = CardBorderAlpha)) { Text(msg, color = palette.bad, fontSize = 13.sp) } }
+        info?.let { GlassCard(glassAlpha) { Text(it, fontSize = 13.sp, color = palette.sub) } }
         suggestion?.let { s ->
             GlassCard(glassAlpha) {
                 Text("意图：${s.intent}", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = palette.text)
                 Text("风险：${s.risk}　${s.note}", fontSize = 13.sp, color = palette.sub)
-                Text("AI 生成 · 发送前请自行判断", fontSize = 11.sp, color = palette.sub)
+                Text("AI 生成 · 发送前请自行判断", fontSize = 13.sp, color = palette.sub)
             }
             if (s.partial) {
                 Text(
                     "⚠ 模型输出被截断，这条是从残缺 JSON 里抢救出来的，建议重新生成",
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = palette.warn,
                 )
             }
             // 分级模式：哪一路挂了/没拿到回复，直接写出来，别让人对着空卡片猜
-            s.warnings.forEach { w -> Text(w, fontSize = 11.sp, color = palette.warn) }
+            s.warnings.forEach { w -> Text(w, fontSize = 13.sp, color = palette.warn) }
             if (s.replies.isEmpty()) {
-                Text("⚠ 这次没拿到可用回复，点上面「生成候选回复」重来", fontSize = 11.sp, color = palette.warn)
+                Text("⚠ 这次没拿到可用回复，点上面「生成候选回复」重来", fontSize = 13.sp, color = palette.warn)
             }
             s.replies.forEachIndexed { index, reply ->
                 val starred = s.best == index
                 GlassCard(
                     glassAlpha,
-                    border = if (starred) palette.primary.copy(alpha = 0.55f) else null,
+                    border = if (starred) palette.primary.copy(alpha = CardBorderAlpha) else null,
                 ) {
                     Column(Modifier.fillMaxWidth().clickable { clipboard.setText(AnnotatedString(reply.text)) }) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(reply.style, color = palette.primary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             if (starred) {
                                 Spacer(Modifier.width(6.dp))
-                                Text("★ 最推荐", color = palette.primary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                                // 选中态走 chip 形态（批 4c）：底色 alpha 0.14 + 1dp 描边 + 13sp
+                                StatusChip("★ 最推荐", palette.primary)
                             }
                         }
                         Text(reply.text, fontSize = 15.sp, color = palette.text)
                         if (starred && s.why.isNotBlank()) {
-                            Text(s.why, fontSize = 12.sp, color = palette.sub)
+                            Text(s.why, fontSize = 13.sp, color = palette.sub)
                         }
                         if (isReplyTooLong(reply.text)) {
                             Text(
                                 "${reply.text.length} 字，偏长 —— 微信里发出去不太像人话，可以点下面的「再短点」",
-                                fontSize = 11.sp,
+                                fontSize = 13.sp,
                                 color = palette.warn,
                             )
                         }
@@ -730,11 +730,11 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
                             REWRITE_PRESETS.forEach { preset ->
                                 Text(
                                     text = if (rewriting == index) "改写中…" else preset.first,
-                                    fontSize = 11.sp,
+                                    fontSize = 13.sp,
                                     color = palette.primary,
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(RadiusR1))
-                                        .background(palette.primary.copy(alpha = 0.12f))
+                                        .background(palette.primary.copy(alpha = ChipBgAlpha))
                                         .clickable(enabled = rewriting == null) {
                                             val old = suggestion?.replies?.getOrNull(index)?.text ?: return@clickable
                                             rewriting = index
@@ -762,7 +762,7 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
                                 )
                             }
                         }
-                        Text("点击复制", fontSize = 11.sp, color = palette.sub)
+                        Text("点击复制", fontSize = 13.sp, color = palette.sub)
                     }
                 }
             }
@@ -830,7 +830,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
             Text(
                 if (!advanced) "用内置的原版狗头军师，提示词可以直接编辑微调。"
                 else "从内置 skill 里选一个，或者粘一个 GitHub 上开源 skill 的地址导入。",
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
         }
@@ -839,7 +839,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
             GlassCard(glassAlpha) {
                 Text(
                     if (text.contains("replies")) "✓ 含 JSON 输出契约 · ${text.length} 字" else "⚠ 缺少 JSON 契约，卡片会解析不了",
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     color = if (text.contains("replies")) palette.ok else palette.warn,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -850,7 +850,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                 )
                 Spacer(Modifier.height(10.dp))
                 if (dirty) {
-                    Text("未保存，你所做出的改动不会被保存", fontSize = 11.sp, color = palette.bad)
+                    Text("未保存，你所做出的改动不会被保存", fontSize = 13.sp, color = palette.bad)
                     Spacer(Modifier.height(6.dp))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -884,7 +884,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                         Text(
                             "${text.length} 字 · " +
                                 if (text.contains("replies")) "含 JSON 契约" else "⚠ 缺少 JSON 契约",
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             color = if (text.contains("replies")) palette.sub else palette.warn,
                         )
                     }
@@ -897,7 +897,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                 // 这里只给「这是什么」；真要逐字看/改，点右上那个「微调」—— 那块才是编辑区。
                 HintText(
                     src?.summary ?: text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty(),
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
                 if (tweak) {
@@ -909,7 +909,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                     )
                     Spacer(Modifier.height(10.dp))
                     if (dirty) {
-                        Text("未保存，你所做出的改动不会被保存", fontSize = 11.sp, color = palette.bad)
+                        Text("未保存，你所做出的改动不会被保存", fontSize = 13.sp, color = palette.bad)
                         Spacer(Modifier.height(6.dp))
                     }
                     Button(
@@ -933,7 +933,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                 glassAlpha = glassAlpha,
                 onToggle = { skillsOpen = !skillsOpen },
             ) {
-                Text("点一下直接启用（会替换当前提示词）", fontSize = 12.sp, color = palette.sub)
+                Text("点一下直接启用（会替换当前提示词）", fontSize = 13.sp, color = palette.sub)
                 Spacer(Modifier.height(4.dp))
                 BUILT_IN_SKILLS.forEach { skill ->
                     val selected = cfg.skillId == skill.id && cfg.prompt == skill.prompt
@@ -957,11 +957,11 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                             Text(skill.name, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text, modifier = Modifier.weight(1f))
                             Text(
                                 if (selected) "使用中" else "启用",
-                                fontSize = 12.sp,
+                                fontSize = 13.sp,
                                 color = if (selected) palette.ok else palette.primary,
                             )
                         }
-                        Text(skill.summary, fontSize = 12.sp, color = palette.sub)
+                        Text(skill.summary, fontSize = 13.sp, color = palette.sub)
                     }
                 }
             }
@@ -975,7 +975,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
             ) {
                 HintText(
                     "粘 SKILL.md 的地址即可（网页地址也行，会自动换成 raw 直链）。导入时会自动补齐 JSON 输出契约。",
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -1012,7 +1012,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                 ) { Text(if (importing) "导入中…" else "导入并启用") }
                 note?.let {
                     Spacer(Modifier.height(6.dp))
-                    Text(it, fontSize = 12.sp, color = if (it.startsWith("导入成功")) palette.ok else palette.bad)
+                    Text(it, fontSize = 13.sp, color = if (it.startsWith("导入成功")) palette.ok else palette.bad)
                 }
             }
         }
@@ -1097,12 +1097,12 @@ fun SettingsScreen(
         GlassCard(d.glassAlpha) {
             Text("外观", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Spacer(Modifier.height(6.dp))
-            Text("玻璃不透明度：${(d.glassAlpha * 100).toInt()}%", fontSize = 12.sp, color = palette.sub)
+            Text("玻璃不透明度：${(d.glassAlpha * 100).toInt()}%", fontSize = 13.sp, color = palette.sub)
             Slider(value = d.glassAlpha, onValueChange = { update(d.copy(glassAlpha = it)) }, valueRange = 0.3f..1f)
             Spacer(Modifier.height(4.dp))
             HintText(
                 "玻璃背景模糊：${d.glassBlur.toInt()}dp（面板背后做一次真实模糊；内置渐变背景没有细节可模糊，会自动跳过）",
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             Slider(value = d.glassBlur, onValueChange = { update(d.copy(glassBlur = it)) }, valueRange = 0f..40f)
@@ -1113,7 +1113,7 @@ fun SettingsScreen(
             Text(
                 "玻璃效果：${glassQualityLabel(effectiveQuality)}" +
                     if (d.glassQuality == GLASS_QUALITY_AUTO) "　（自动判定）" else "　（手动选的）",
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1149,14 +1149,14 @@ fun SettingsScreen(
                     "当前用的是内置渐变背景（跟随系统明暗自动切换，不是图片）；" +
                         "选一张自己的图就会替换掉它，点「恢复默认背景」可以换回来。"
                 },
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             // 压暗只对自定义背景图开放：内置渐变本身已经调过明度，
             // 再压一层会把配色一起糊掉，所以没选图时这个滑杆根本不出现。
             if (d.bgUri.isNotBlank()) {
                 Spacer(Modifier.height(4.dp))
-                Text("背景压暗：${(d.bgDim * 100).toInt()}%", fontSize = 12.sp, color = palette.sub)
+                Text("背景压暗：${(d.bgDim * 100).toInt()}%", fontSize = 13.sp, color = palette.sub)
                 Slider(value = d.bgDim, onValueChange = { update(d.copy(bgDim = it)) }, valueRange = 0f..0.8f)
             }
             Spacer(Modifier.height(14.dp))
@@ -1167,7 +1167,7 @@ fun SettingsScreen(
                     Text(
                         "未保存，你所做出的改动不会被保存",
                         modifier = Modifier.weight(1f),
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = palette.bad,
                     )
                     Spacer(Modifier.width(10.dp))
@@ -1193,7 +1193,7 @@ fun SettingsScreen(
             HintText(
                 "接口地址 / API Key / 模型、微信内自动分析（参考条数 · 最短间隔 · temperature · 敏感内容检查）、\n" +
                     "备份 / 迁移、诊断 —— 都在这一层里面。",
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             Spacer(Modifier.height(8.dp))
@@ -1208,14 +1208,14 @@ fun SettingsScreen(
         GlassCard(d.glassAlpha) {
             Text("关于", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = palette.text)
             Spacer(Modifier.height(6.dp))
-            Text("版本：${appVersion(context)}", fontSize = 12.sp, color = palette.text)
+            Text("版本：${appVersion(context)}", fontSize = 13.sp, color = palette.text)
             Spacer(Modifier.height(6.dp))
             HintText(
                 "· 开启后，聊天页最近几条消息会发送到你填写的接口地址，请自行确认该服务可信。\n" +
                     "· API Key 以明文存放在本应用私有目录（不能加密：注入微信进程的代码需要跨进程读取，Keystore 密钥按 UID 隔离读不到）。\n" +
                     "· 只读消息、只把候选回复填进输入框，不会自动发送；但仍属于修改微信客户端行为，有风控风险，建议先用小号。\n" +
                     "· 日志关键字：[Goutou]。",
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
         }
@@ -1237,7 +1237,7 @@ private fun GroupTitle(text: String) {
     Text(
         text,
         modifier = Modifier.padding(start = 18.dp, top = 18.dp, bottom = 3.dp),
-        fontSize = 12.sp,
+        fontSize = 13.sp,
         fontWeight = FontWeight.Medium,
         color = palette.sub.copy(alpha = 0.75f),
         letterSpacing = 0.8.sp,
@@ -1250,16 +1250,8 @@ private fun GroupTitle(text: String) {
  */
 @Composable
 private fun SourceChip(skillId: String) {
-    val palette = LocalPalette.current
-    Text(
-        if (skillId == "custom") "导入 / 自定义" else "内置",
-        modifier = Modifier
-            .clip(RoundedCornerShape(RadiusR1))
-            .background(palette.primary.copy(alpha = 0.14f))
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-        fontSize = 11.sp,
-        color = palette.primary,
-    )
+    // 形态统一交给 StatusChip（chip 底色 alpha 0.14 + 1dp 描边 + 13sp 字），别再手搓一份
+    StatusChip(if (skillId == "custom") "导入 / 自定义" else "内置", LocalPalette.current.primary)
 }
 
 /**
@@ -1509,7 +1501,7 @@ fun AdvancedScreen(
         if (dirty) {
             Text(
                 "⚠ 本页有未保存的改动（白名单 / 识图 / 生成模式是改完立刻生效，其余要按页底那个「保存」）",
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = palette.bad,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
             )
@@ -1591,7 +1583,7 @@ fun AdvancedScreen(
             }
             modelsNote?.let {
                 Spacer(Modifier.height(4.dp))
-                Text(it, fontSize = 11.sp, color = if (it.startsWith("拉取失败")) palette.bad else palette.ok)
+                Text(it, fontSize = 13.sp, color = if (it.startsWith("拉取失败")) palette.bad else palette.ok)
             }
             if (modelsAt > 0L) {
                 Spacer(Modifier.height(2.dp))
@@ -1611,14 +1603,14 @@ fun AdvancedScreen(
                         "请求里带 response_format=json_object，让服务端保证回的是合法 JSON，" +
                             "能少一些「模型没返回 JSON」。有些中转不支持 —— 开了报错就关掉。" +
                             "只影响生成候选，不影响单条改写和风格提炼。",
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = palette.sub,
                     )
                 }
                 Switch(checked = d.jsonMode, onCheckedChange = { update(d.copy(jsonMode = it)) })
             }
             Spacer(Modifier.height(12.dp))
-            Text("单次回复的 token 上限", fontSize = 12.sp, color = palette.sub)
+            Text("单次回复的 token 上限", fontSize = 13.sp, color = palette.sub)
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 GlassPill("200", d.maxTokens == 200, Modifier.weight(1f)) { update(d.copy(maxTokens = 200)) }
@@ -1630,7 +1622,7 @@ fun AdvancedScreen(
             Text(
                 if (d.maxTokens == 0) "无限制：请求里不带 max_tokens，由服务端决定（进阶 skill 建议用这档）"
                 else "越小越省额度，但 skill 提示词较长时可能被截断",
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
         }
@@ -1640,7 +1632,7 @@ fun AdvancedScreen(
             Text(
                 "开启后：聊天内容先送到本机的 127.0.0.1，由这个 App 带上 Key 去调你的接口。\n" +
                     "注入到微信里的那段代码从此**拿不到 Key** —— 做法不是加密，是根本不给它。",
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             Spacer(Modifier.height(8.dp))
@@ -1653,7 +1645,7 @@ fun AdvancedScreen(
                         } else {
                             "关着：走直连（Key 明文存在本机，并且会推给微信进程）"
                         },
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = palette.sub,
                     )
                 }
@@ -1693,7 +1685,7 @@ fun AdvancedScreen(
                         ProxyState.lastError != null -> "● 服务没起来：${ProxyState.lastError}"
                         else -> "● 服务没起来（点上面的开关关掉再开一次；若仍不行点「测试代理」看详情）"
                     },
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = if (ProxyState.running) palette.ok else palette.bad,
                 )
                 val (lastRoute, lastRouteAt) = store.lastRoute()
@@ -1703,17 +1695,17 @@ fun AdvancedScreen(
                         "微信侧最近一次走的是：" + (if (ok) "本地代理 ✅" else "直连（代理还没被用上）") +
                             " · " + java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
                                 .format(java.util.Date(lastRouteAt)),
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = if (ok) palette.ok else palette.warn,
                     )
                 } else {
-                    Text("微信侧还没回传过路线 —— 到微信里点一次「↻ 重新识别」就会有了", fontSize = 11.sp, color = palette.sub)
+                    Text("微信侧还没回传过路线 —— 到微信里点一次「↻ 重新识别」就会有了", fontSize = 13.sp, color = palette.sub)
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "提示：识别结果**有缓存**（同一条消息不会重复调接口）。开了代理之后，" +
                         "要对**新消息**点一次「↻ 重新识别」才会真正走代理。",
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -1771,7 +1763,7 @@ fun AdvancedScreen(
                     "⚠ 微信进程对 http 明文的策略不归我们管：如果开了之后微信里识别一直失败，" +
                         "把这里关掉就退回直连（注入侧给的报错里也会这么提示）。\n" +
                         "重启手机后代理不会自己回来，打开一次 App 就会自动恢复。",
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = palette.warn,
                 )
                 Spacer(Modifier.height(4.dp))
@@ -1779,13 +1771,13 @@ fun AdvancedScreen(
                     "如果状态行显示「服务在跑」但过一会儿就没了：这个应用需要常驻，请把它加入系统的" +
                         "「电池优化白名单 / 允许后台运行」（各家名字不同：华为「应用启动管理」、小米「省电策略·无限制」、" +
                         "OPPO / vivo 类似）。",
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
             }
             proxyNote?.let {
                 Spacer(Modifier.height(6.dp))
-                Text(it, fontSize = 12.sp, color = palette.sub)
+                Text(it, fontSize = 13.sp, color = palette.sub)
             }
         }
 
@@ -1806,18 +1798,18 @@ fun AdvancedScreen(
                     "分级：拆成两路**并行**跑 —— 一路只判意图与风险，另一路只写 3 条回复，最后合成一张卡片。" +
                         "任一路挂了另一路照常显示（风险会标成「未评估」）。"
                 },
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             Spacer(Modifier.height(6.dp))
             Text(
                 "这两个 pill 点一下就生效（立刻落盘，不用等页底那个「保存」）；下面的接口地址仍然是草稿。",
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = palette.ok,
             )
             if (d.graded) {
                 Spacer(Modifier.height(10.dp))
-                Text("第二套接口（只给「风险评估」那一路用）", fontSize = 12.sp, color = palette.sub)
+                Text("第二套接口（只给「风险评估」那一路用）", fontSize = 13.sp, color = palette.sub)
                 Spacer(Modifier.height(6.dp))
                 OutlinedTextField(
                     value = d.baseUrl2,
@@ -1873,7 +1865,7 @@ fun AdvancedScreen(
                 }
                 modelsNote2?.let {
                     Spacer(Modifier.height(4.dp))
-                    Text(it, fontSize = 11.sp, color = if (it.startsWith("拉取失败")) palette.bad else palette.ok)
+                    Text(it, fontSize = 13.sp, color = if (it.startsWith("拉取失败")) palette.bad else palette.ok)
                 }
                 if (models2At > 0L) {
                     Spacer(Modifier.height(2.dp))
@@ -1894,7 +1886,7 @@ fun AdvancedScreen(
                     "留空就复用第一套 —— 那等于「同一个模型拆两路提示词」，也完全能用。" +
                         "想省钱可以给风险那一路单独配个便宜的小模型（比如轻量档）。" +
                         "第二套不参与首页的「接口自检」，配错了会在卡片上直接写出来。",
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
             }
@@ -1909,7 +1901,7 @@ fun AdvancedScreen(
                     "截图、长图里的话也能被读懂。\n" +
                     "认字完全离线：内置的中文模型，不联网、不下载、不需要 Play 服务，图片也不会上传" +
                     "（只在本机两个进程之间走一趟）。代价是这个安装包大了十几 MB。",
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             Spacer(Modifier.height(8.dp))
@@ -1922,7 +1914,7 @@ fun AdvancedScreen(
                         } else {
                             "关着：图片还是老样子 —— 用 [图片/表情/语音] 占位"
                         },
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = palette.sub,
                     )
                 }
@@ -1939,15 +1931,15 @@ fun AdvancedScreen(
                 Text(
                     "⚠ 还差一步：认字这件事在 App 进程里做，所以得先把上面那张卡的「本地代理」打开 —— " +
                         "否则微信那边连不上本机端口，会直接跳过（图片仍是占位）。",
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = palette.warn,
                 )
             }
             Spacer(Modifier.height(8.dp))
-            Text("最近一次：$ocrStatus", fontSize = 11.sp, color = palette.sub)
+            Text("最近一次：$ocrStatus", fontSize = 13.sp, color = palette.sub)
             ocrNote?.let {
                 Spacer(Modifier.height(4.dp))
-                Text(it, fontSize = 11.sp, color = palette.ok)
+                Text(it, fontSize = 13.sp, color = palette.ok)
             }
         }
 
@@ -1985,7 +1977,7 @@ fun AdvancedScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("微信内自动分析", fontSize = 15.sp, color = palette.text)
-                    Text("关掉后只在手动点「识别」时出现卡片", fontSize = 11.sp, color = palette.sub)
+                    Text("关掉后只在手动点「识别」时出现卡片", fontSize = 13.sp, color = palette.sub)
                 }
                 Switch(checked = d.enabled, onCheckedChange = { update(d.copy(enabled = it)) })
             }
@@ -1993,7 +1985,7 @@ fun AdvancedScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("敏感内容检查", fontSize = 15.sp, color = palette.text)
-                    Text("命中验证码/银行卡/转账时先拦一次（推荐开）", fontSize = 11.sp, color = palette.sub)
+                    Text("命中验证码/银行卡/转账时先拦一次（推荐开）", fontSize = 13.sp, color = palette.sub)
                 }
                 Switch(checked = !d.allowSensitive, onCheckedChange = { update(d.copy(allowSensitive = !it)) })
             }
@@ -2005,7 +1997,7 @@ fun AdvancedScreen(
                     Text(
                         "未保存，你所做出的改动不会被保存",
                         modifier = Modifier.weight(1f),
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = palette.bad,
                     )
                     Spacer(Modifier.width(10.dp))
@@ -2040,7 +2032,7 @@ fun AdvancedScreen(
                 ).forEach { line ->
                     Text(
                         "· $line",
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = Color(0xFF55525E),
                         modifier = Modifier.padding(top = 3.dp),
                     )
@@ -2058,7 +2050,7 @@ fun AdvancedScreen(
                 ).forEach { line ->
                     Text(
                         "· $line",
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = Color(0xFF55525E),
                         modifier = Modifier.padding(top = 3.dp),
                     )
@@ -2074,7 +2066,7 @@ fun AdvancedScreen(
                         } else {
                             "关着：所有聊天都会分析（默认）"
                         },
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = palette.sub,
                     )
                 }
@@ -2118,7 +2110,7 @@ fun AdvancedScreen(
                     Spacer(Modifier.height(6.dp))
                     Text(
                         "还是空的 —— 开着白名单却一条都没加，等于所有聊天都不工作。",
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = palette.warn,
                     )
                 } else {
@@ -2178,12 +2170,12 @@ fun AdvancedScreen(
                         },
                     )
                 }
-                Text("长按任意一项可多选，然后一次移出 / 删除。", fontSize = 11.sp, color = palette.sub)
+                Text("长按任意一项可多选，然后一次移出 / 删除。", fontSize = 13.sp, color = palette.sub)
                 }
                 Spacer(Modifier.height(6.dp))
                 HintText(
                     "名字要和微信里显示的一致（群聊填群名；改过备注的用改过的名字）；懒得敲字就用下面的「拉取会话列表」。",
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
             }
@@ -2194,7 +2186,7 @@ fun AdvancedScreen(
                 "点一下，然后回微信的首页或通讯录停两秒（滚一下能多收几个），再回来打开下面的「拉取到的联系人」去挑。\n" +
                     "白名单开着的时候，你打开过的那个聊天也会自己进来（认的是聊天页顶上那个名字，也就是备注）。\n" +
                     "⚠ 个人资料页不是来源 —— 那一页只有「微信号 / 地区」这种字段，读出来全是杂项，别在那里等。",
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             Spacer(Modifier.height(6.dp))
@@ -2208,7 +2200,7 @@ fun AdvancedScreen(
                     shape = RoundedCornerShape(RadiusR2),
                     colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                 ) { Text("拉取会话列表") }
-                Text(pullInfo, fontSize = 11.sp, color = palette.sub, modifier = Modifier.weight(1f))
+                Text(pullInfo, fontSize = 13.sp, color = palette.sub, modifier = Modifier.weight(1f))
             }
             val todo = cands.filter { it !in d.whitelist }
             Spacer(Modifier.height(10.dp))
@@ -2219,7 +2211,7 @@ fun AdvancedScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(RadiusR2))
-                    .background(palette.primary.copy(alpha = 0.12f))
+                    .background(palette.primary.copy(alpha = ChipBgAlpha))
                     .clickable { onOpenCandidates() }
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             ) {
@@ -2231,24 +2223,24 @@ fun AdvancedScreen(
                             todo.isEmpty() -> "拉回来的都加进去了 · 点开可以搜、也可以移出"
                             else -> "还没加进去的 ${todo.size} 个 · 点开可以搜索、批量加入"
                         },
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = palette.sub,
                     )
                 }
-                Text("查看 ›", fontSize = 12.sp, color = palette.primary)
+                Text("查看 ›", fontSize = 13.sp, color = palette.primary)
             }
             if (ignoredCount > 0) {
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "已忽略 $ignoredCount 个（删掉的杂项）",
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = palette.sub,
                         modifier = Modifier.weight(1f),
                     )
                     Text(
                         "恢复",
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         color = palette.primary,
                         modifier = Modifier
                             .clip(RoundedCornerShape(RadiusR1))
@@ -2263,7 +2255,7 @@ fun AdvancedScreen(
             }
             whitelistNote?.let {
                 Spacer(Modifier.height(6.dp))
-                Text(it, fontSize = 11.sp, color = palette.ok)
+                Text(it, fontSize = 13.sp, color = palette.ok)
             }
         }
 
@@ -2274,14 +2266,14 @@ fun AdvancedScreen(
             Text(
                 "换包名、换手机的时候用：导出成一个 json 文件，装好新的再导入回来。\n" +
                     "导入是合并：角色只覆盖同名的，备份里没有的会保留。",
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("导出时包含 API Key", fontSize = 13.sp, color = palette.text)
-                    Text("开了的话导出文件里有明文 Key，别往公开地方放", fontSize = 11.sp, color = palette.sub)
+                    Text("开了的话导出文件里有明文 Key，别往公开地方放", fontSize = 13.sp, color = palette.sub)
                 }
                 Switch(checked = includeKey, onCheckedChange = { includeKey = it })
             }
@@ -2301,7 +2293,7 @@ fun AdvancedScreen(
             }
             backupNote?.let {
                 Spacer(Modifier.height(6.dp))
-                Text(it, fontSize = 12.sp, color = if (it.startsWith("已")) palette.ok else palette.bad)
+                Text(it, fontSize = 13.sp, color = if (it.startsWith("已")) palette.ok else palette.bad)
             }
             Spacer(Modifier.height(10.dp))
             OutlinedButton(
@@ -2313,12 +2305,12 @@ fun AdvancedScreen(
             HintText(
                 "出问题时用它：环境 / 配置（不含 Key）/ 角色条数 / 抓到的界面结构 / 最近一次调用。\n" +
                     "⚠️ 里面有你和对方的聊天内容，发出去之前先自己看一眼。",
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             diagNote?.let {
                 Spacer(Modifier.height(6.dp))
-                Text(it, fontSize = 12.sp, color = if (it.startsWith("已")) palette.ok else palette.bad)
+                Text(it, fontSize = 13.sp, color = if (it.startsWith("已")) palette.ok else palette.bad)
             }
         }
 
@@ -2327,7 +2319,7 @@ fun AdvancedScreen(
             Text(
                 "某个聊天页连按钮都不弹、或者「运行状态」报错的时候用这里：\n" +
                     "让微信进程抓一次当前界面、看它真正发出去的那次调用，再复制出来发我。",
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             Spacer(Modifier.height(8.dp))
@@ -2415,7 +2407,7 @@ fun ChatCandidatesScreen(
                 Text("搜索", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "拉回来的名字可能有几十个 —— 输一两个字就能筛出来（只筛这一页的名单）。",
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -2445,7 +2437,7 @@ fun ChatCandidatesScreen(
                         Text(
                             "这里加进去的名字，在开关打开之前都不会生效 —— " +
                                 "回上一页把「只对白名单里的聊天生效」打开。",
-                            fontSize = 11.sp,
+                            fontSize = 13.sp,
                             color = Color(0xFF55525E),
                             modifier = Modifier.padding(top = 3.dp),
                         )
@@ -2462,18 +2454,18 @@ fun ChatCandidatesScreen(
                         shape = RoundedCornerShape(RadiusR2),
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                     ) { Text("拉取会话列表") }
-                    Text(pullInfo, fontSize = 11.sp, color = palette.sub, modifier = Modifier.weight(1f))
+                    Text(pullInfo, fontSize = 13.sp, color = palette.sub, modifier = Modifier.weight(1f))
                 }
                 note?.let {
                     Spacer(Modifier.height(6.dp))
-                    Text(it, fontSize = 11.sp, color = palette.ok)
+                    Text(it, fontSize = 13.sp, color = palette.ok)
                 }
             }
         }
 
         if (picking) {
             item {
-                GlassCard(d.glassAlpha, border = palette.primary.copy(alpha = 0.5f)) {
+                GlassCard(d.glassAlpha, border = palette.primary.copy(alpha = CardBorderAlpha)) {
                     PickBar(
                         count = picked.size,
                         total = hitTodo.size,
@@ -2512,7 +2504,7 @@ fun ChatCandidatesScreen(
         item {
             Text(
                 "还没加进去的（${todo.size}）" + if (query.isNotBlank()) " · 筛出 ${hitTodo.size} 个" else "",
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
                 modifier = Modifier.padding(start = 30.dp, end = 30.dp, top = 10.dp, bottom = 4.dp),
             )
@@ -2527,7 +2519,7 @@ fun ChatCandidatesScreen(
                             query.isNotBlank() -> "没搜到「${query.trim()}」—— 换个字试试，或者清空搜索框。"
                             else -> "拉回来的 ${all.size} 个都已经加进白名单了。"
                         },
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         color = palette.sub,
                     )
                 }
@@ -2562,7 +2554,7 @@ fun ChatCandidatesScreen(
             item {
                 Text(
                     "已经在白名单里的（${added.size}）" + if (query.isNotBlank()) " · 筛出 ${hitAdded.size} 个" else "",
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                     modifier = Modifier.padding(start = 30.dp, end = 30.dp, top = 14.dp, bottom = 4.dp),
                 )
@@ -2591,7 +2583,7 @@ fun ChatCandidatesScreen(
             Column(Modifier.padding(horizontal = 30.dp, vertical = 10.dp)) {
                 Text(
                     "长按任意一项可多选，然后一次加入或删除。删除的杂项会被记下来，下次拉取不再出现。",
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
                 if (ignoredCount > 0) {
@@ -2599,13 +2591,13 @@ fun ChatCandidatesScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             "已忽略 $ignoredCount 个（删掉的杂项）",
-                            fontSize = 11.sp,
+                            fontSize = 13.sp,
                             color = palette.sub,
                             modifier = Modifier.weight(1f),
                         )
                         Text(
                             "恢复",
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             color = palette.primary,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(RadiusR1))
@@ -2651,7 +2643,7 @@ private fun GeoCard(store: ConfigStore, glassAlpha: Float) {
         Text(
             "「运行状态 → 接口自检」里那两行省份，是拿 IP 去问第三方库要的 —— 这是整个模块唯一一处" +
                 "会把 IP 发给别人的地方。关掉之后自检只显示 IP，一次都不问。",
-            fontSize = 11.sp,
+            fontSize = 13.sp,
             color = palette.sub,
         )
         Spacer(Modifier.height(8.dp))
@@ -2660,7 +2652,7 @@ private fun GeoCard(store: ConfigStore, glassAlpha: Float) {
                 Text("查询 IP 归属地", fontSize = 15.sp, color = palette.text)
                 Text(
                     if (d.geoEnabled) "自检时带上省份（结果缓存 10 分钟）" else "已关闭：不请求任何第三方",
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
             }
@@ -2678,7 +2670,7 @@ private fun GeoCard(store: ConfigStore, glassAlpha: Float) {
         if (d.geoEnabled && d.geoEndpoint.trim() != persisted.geoEndpoint.trim()) {
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("地址还没保存", modifier = Modifier.weight(1f), fontSize = 11.sp, color = palette.bad)
+                Text("地址还没保存", modifier = Modifier.weight(1f), fontSize = 13.sp, color = palette.bad)
                 Button(
                     onClick = { saveGeoNow(d.geoEnabled, d.geoEndpoint) },
                     modifier = Modifier.height(42.dp),
@@ -2731,7 +2723,7 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
             Text(
                 "某些聊天页连卡片都不弹时用这个：先在微信里停在那个聊天页 → 切回这里点下面的按钮 → " +
                     "再切回微信（那个页面重新出现就会自动抓）→ 回来点「刷新」→ 复制下面的「诊断」发我。",
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             Spacer(Modifier.height(8.dp))
@@ -2742,18 +2734,18 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
                     colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                 ) { Text("抓当前微信界面") }
                 if (diagAsked) {
-                    Text("已排队，切回微信那一页即抓", fontSize = 12.sp, color = palette.ok)
+                    Text("已排队，切回微信那一页即抓", fontSize = 13.sp, color = palette.ok)
                 }
             }
         }
 
         if (trace.isNotBlank()) {
-            GlassCard(glassAlpha, border = palette.ok.copy(alpha = 0.45f)) {
+            GlassCard(glassAlpha, border = palette.ok.copy(alpha = CardBorderAlpha)) {
                 Text("决策轨迹（每一轮读到什么、停在哪一步）", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "更新于 ${formatTime(traceAt)} · 卡片不弹时先看它：注入侧每一轮都留一条，" +
                         "扫一眼就知道是卡在「找不到输入框」还是「最后一条是我发的」。它刻意不含聊天正文。",
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -2770,18 +2762,18 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
                 Text(
                     "在微信里打开一个聊天页停一会儿，注入侧就会把判定记下来并自动回传；" +
                         "也可以点上面那个「抓当前微信界面」立刻带一份回来。",
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
             }
         }
 
         if (diag.isNotBlank()) {
-            GlassCard(glassAlpha, border = palette.warn.copy(alpha = 0.5f)) {
+            GlassCard(glassAlpha, border = palette.warn.copy(alpha = CardBorderAlpha)) {
                 Text("诊断（来自微信进程）", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "生成于 ${formatTime(diagAt)} · 排查「读不到消息 / 全是图片」时把它复制给对方",
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -2795,17 +2787,17 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
         } else {
             GlassCard(glassAlpha) {
                 Text("还没有诊断", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
-                Text("上面那个按钮抓过一次之后，微信进程会把界面结构留在这里。", fontSize = 12.sp, color = palette.sub)
+                Text("上面那个按钮抓过一次之后，微信进程会把界面结构留在这里。", fontSize = 13.sp, color = palette.sub)
             }
         }
 
         if (lastCall.isNotBlank()) {
-            GlassCard(glassAlpha, border = palette.primary.copy(alpha = 0.45f)) {
+            GlassCard(glassAlpha, border = palette.primary.copy(alpha = CardBorderAlpha)) {
                 Text("最近一次调用（注入侧真正发出去的）", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "发生于 ${formatTime(lastCallAt)} · 这里是微信进程实际拿去调接口的那一份，不是本 App 里的配置。" +
                         "核对「当前军师」有没有真的生效，看 system 长度那一行。",
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -2819,7 +2811,7 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
         } else {
             GlassCard(glassAlpha) {
                 Text("还没有调用记录", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
-                Text("在微信里生成过一次候选回复之后，那份请求就会留在这里。", fontSize = 12.sp, color = palette.sub)
+                Text("在微信里生成过一次候选回复之后，那份请求就会留在这里。", fontSize = 13.sp, color = palette.sub)
             }
         }
     }
@@ -2877,7 +2869,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                     "拼进提示词，直接影响「军师」生成出来的回复。\n" +
                     "长按某一项可以直接删除它；点进去可以改名字，\n" +
                         "也能「把另一个角色合并进来」—— 同一个人被记成两条时用那个。",
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
         }
@@ -2888,7 +2880,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                 Text(
                     "去微信里打开几个聊天页，每个停两三秒，再回来点「刷新」。\n" +
                         "（只在聊天页可见时读得到，所以记录是「你在场时看到的那几条」慢慢攒起来的。）",
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
             }
@@ -2898,12 +2890,9 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
             val self = role.key == SELF_ROLE_KEY
             GlassCard(
                 glassAlpha,
-                border = when {
-                    // 「本人」用微信里「自己发的那条」的那个绿，一眼看出是「我」
-                    self -> palette.ok.copy(alpha = 0.55f)
-                    role.relation.isBlank() -> palette.primary.copy(alpha = 0.15f)
-                    else -> palette.primary.copy(alpha = 0.5f)
-                },
+                // 批 4c：卡片描边只表达「本人 = 绿」这一件事（原来「没写关系」也染一道紫，
+                // 紫色当成了「正常」用，跟状态语义打架）。关系没写靠下面那行琥珀文字说。
+                border = if (self) palette.ok.copy(alpha = CardBorderAlpha) else null,
             ) {
                 Column(
                     Modifier.fillMaxWidth().combinedClickable(
@@ -2914,7 +2903,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (self) {
-                            Box(Modifier.size(8.dp).clip(CircleShape).background(palette.ok))
+                            StatusDot(palette.ok)
                         }
                         Text(
                             role.name,
@@ -2933,7 +2922,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                         } else {
                             Spacer(Modifier.weight(1f))
                         }
-                        Text("${role.msgs.size} 条", fontSize = 12.sp, color = palette.sub)
+                        Text("${role.msgs.size} 条", fontSize = 13.sp, color = palette.sub)
                     }
                     Text(
                         when {
@@ -2944,16 +2933,17 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                             role.relation.isBlank() -> "还没写 TA 是你什么人"
                             else -> "${role.relation}${if (role.note.isBlank()) "" else " · ${role.note.take(18)}"}"
                         },
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         color = when {
                             self -> palette.ok
                             role.relation.isBlank() -> palette.warn
-                            else -> palette.primary
+                            // 批 4c：紫色只表示「选中 / 主操作」，不承担「正常」—— 普通档案用次要文字色
+                            else -> palette.sub
                         },
                     )
                     Text(
                         "最近一条：${if (role.lastAt > 0) formatTime(role.lastAt) else "—"}",
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = palette.sub,
                     )
                 }
@@ -3027,7 +3017,7 @@ private fun RoleDetail(
             if (role.renamed) {
                 Text(
                     "（识别到的会话名是「${role.key}」，它负责匹配、不会被改动，所以改了名字以后消息还是记到这一条）",
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
             }
@@ -3051,12 +3041,12 @@ private fun RoleDetail(
             Spacer(Modifier.height(6.dp))
             Text(
                 "例：同一个组的后端，说话直接，最近在催我 review；上次帮他带过饭。",
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             Spacer(Modifier.height(10.dp))
             if (dirty) {
-                Text("未保存，你所做出的改动不会被保存", fontSize = 11.sp, color = palette.bad)
+                Text("未保存，你所做出的改动不会被保存", fontSize = 13.sp, color = palette.bad)
                 Spacer(Modifier.height(6.dp))
             }
             Button(
@@ -3077,12 +3067,12 @@ private fun RoleDetail(
             Text(
                 "时间是我「看到」它的时间，不是微信里那条消息的真实时间 —— 微信不给这条信息，" +
                     "而模块只在聊天页可见时读得到。生成回复时会带上最近 20 条（屏幕上已有的不再重复）。",
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             Spacer(Modifier.height(6.dp))
             if (role.msgs.isEmpty()) {
-                Text("（还没有）", fontSize = 12.sp, color = palette.sub)
+                Text("（还没有）", fontSize = 13.sp, color = palette.sub)
             } else {
                 var lastShown = 0L
                 role.msgs.takeLast(60).forEach { m ->
@@ -3111,12 +3101,12 @@ private fun RoleDetail(
                 } else {
                     "同一个人被记成两条时用这个：选一个角色，把它的记录并进这一条（按时间排好）。"
                 },
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = palette.sub,
             )
             mergedNote?.let {
                 Spacer(Modifier.height(6.dp))
-                Text(it, fontSize = 12.sp, color = palette.ok)
+                Text(it, fontSize = 13.sp, color = palette.ok)
             }
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -3152,7 +3142,7 @@ private fun RoleDetail(
                     Text(
                         "这里只改显示。识别到的会话名「${role.key}」不变 —— 所以改完名字，" +
                             "以后这个会话的消息还是记到同一条上，不会分家。",
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = palette.sub,
                     )
                 }
@@ -3175,7 +3165,7 @@ private fun RoleDetail(
                 Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
                     Text(
                         "合并后：两边记录按时间排好留在「${role.name}」，被并的那个角色会消失。",
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = palette.sub,
                     )
                     Spacer(Modifier.height(8.dp))
@@ -3195,7 +3185,7 @@ private fun RoleDetail(
                             Text(
                                 "${o.msgs.size} 条记录" +
                                     if (o.relation.isNotBlank()) " · ${o.relation}" else "",
-                                fontSize = 11.sp,
+                                fontSize = 13.sp,
                                 color = palette.sub,
                             )
                         }
@@ -3289,14 +3279,14 @@ private fun SelfStyleDetail(store: ConfigStore, glassAlpha: Float) {
                         "关掉之后：不再采集、不再生成，也不再使用（已经生成的那份留着，重新打开立刻可用）；\n" +
                         "已经攒下的原始记录会被清掉。\n" +
                         "样本只在你打开聊天页时才读得到，所以是「你在场时看到的那几句」慢慢攒起来的。",
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
             }
         }
 
         item {
-            GlassCard(glassAlpha, border = if (on) palette.ok.copy(alpha = 0.5f) else null) {
+            GlassCard(glassAlpha, border = if (on) palette.ok.copy(alpha = CardBorderAlpha) else null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(
@@ -3307,7 +3297,7 @@ private fun SelfStyleDetail(store: ConfigStore, glassAlpha: Float) {
                         )
                         Text(
                             if (on) "已开启：会采集我说的话" else "未开启：不采集、不生成、不存储",
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             color = if (on) palette.ok else palette.sub,
                         )
                     }
@@ -3334,7 +3324,7 @@ private fun SelfStyleDetail(store: ConfigStore, glassAlpha: Float) {
                 Text(
                     "现在是 ${"$hour".padStart(2, '0')}:00 —— 0 点到 23 点里挑都行。" +
                         if (on) "改完立刻生效（按新的时间重新排）。" else "打开上面的开关后按这个时间跑。",
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     color = palette.sub,
                 )
                 Slider(
@@ -3363,20 +3353,20 @@ private fun SelfStyleDetail(store: ConfigStore, glassAlpha: Float) {
                 if (skill.isBlank()) {
                     HintText(
                         "还没有生成过。攒够 ${StyleSkill.MIN_SAMPLES} 条样本之后，可以点下面手动生成一次（不用等到中午）。",
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         color = palette.sub,
                         modifier = Modifier.padding(top = 10.dp),
                     )
                 } else {
                     Text(
                         "当前 skill（生成回复时会带上）",
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         color = palette.sub,
                         modifier = Modifier.padding(top = 10.dp),
                     )
                     Text(
                         skill,
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         color = palette.text,
                         modifier = Modifier
                             .padding(top = 4.dp)
@@ -3387,7 +3377,7 @@ private fun SelfStyleDetail(store: ConfigStore, glassAlpha: Float) {
                     )
                 }
                 msg?.let {
-                    Text(it, fontSize = 12.sp, color = palette.primary, modifier = Modifier.padding(top = 8.dp))
+                    Text(it, fontSize = 13.sp, color = palette.primary, modifier = Modifier.padding(top = 8.dp))
                 }
                 Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     GlassPill(if (busy) "生成中…" else "立即生成", selected = false) {
@@ -3525,7 +3515,7 @@ fun NoticeBanner(title: String, lines: List<String>) {
         lines.forEach { line ->
             Text(
                 line,
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 color = Color(0xFF55525E),
                 modifier = Modifier.padding(top = 3.dp),
             )
@@ -3577,7 +3567,7 @@ private fun PickRow(
         if (!picking) {
             Text(
                 actionLabel,
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = actionColor,
                 modifier = Modifier
                     .clip(RoundedCornerShape(RadiusR1))
@@ -3601,12 +3591,12 @@ private fun PickBar(
     onSelectAll: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    Text("已选 $count / $total（长按进入多选，点一下勾选）", fontSize = 11.sp, color = palette.text)
+    Text("已选 $count / $total（长按进入多选，点一下勾选）", fontSize = 13.sp, color = palette.text)
     Spacer(Modifier.height(4.dp))
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             if (total > 0 && count >= total) "取消全选" else "全选",
-            fontSize = 12.sp,
+            fontSize = 13.sp,
             color = palette.primary,
             modifier = Modifier
                 .clip(RoundedCornerShape(RadiusR1))
@@ -3615,7 +3605,7 @@ private fun PickBar(
         )
         Text(
             "退出多选",
-            fontSize = 12.sp,
+            fontSize = 13.sp,
             color = palette.sub,
             modifier = Modifier
                 .clip(RoundedCornerShape(RadiusR1))
@@ -3637,7 +3627,7 @@ private fun PickBar(
             enabled = count > 0,
             modifier = Modifier.weight(1f).height(42.dp),
             shape = RoundedCornerShape(RadiusR2),
-        ) { Text(dangerLabel, fontSize = 12.sp, color = palette.bad) }
+        ) { Text(dangerLabel, fontSize = 13.sp, color = palette.bad) }
     }
 }
 
