@@ -97,9 +97,9 @@ class ScreenRenderTest {
      * 这里**画背景而不是挂 BackgroundLayer**：后者有一圈「玻璃扫光」的 withFrameNanos 循环，
      * 会让测试永远等不到 idle（AppNotIdleException）。背景本身是纯绘制，直接调就好。
      */
-    private fun renderBackdrop(name: String) {
+    private fun renderBackdrop(name: String, dark: Boolean) {
         rule.setContent {
-            GoutouTheme {
+            GoutouTheme(dark = dark) {
                 val backdrop = rememberBackdrop(bgUri = "", dim = 0f, blur = 24f)
                 Box(
                     Modifier.fillMaxSize().drawBehind {
@@ -125,13 +125,12 @@ class ScreenRenderTest {
 
     @Test
     fun `内置渐变背景能渲染 浅色`() {
-        renderBackdrop("background-light")
+        renderBackdrop("background-light", dark = false)
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h891dp-xxhdpi+night")
     fun `内置渐变背景能渲染 深色`() {
-        renderBackdrop("background-dark")
+        renderBackdrop("background-dark", dark = true)
     }
 
     @Test

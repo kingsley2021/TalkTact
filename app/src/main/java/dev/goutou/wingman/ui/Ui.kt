@@ -350,13 +350,19 @@ private class AgslGlass {
     }
 }
 
+/**
+ * 主题。
+ *
+ * [dark] 留空 = 跟随系统（正式路径）；显式传值只有两个用途：截图回归要深色 / 浅色各出一张，
+ * 以及 Compose Preview 想钉住某一套配色 —— 都比改 Robolectric 限定符干净。
+ */
 @Composable
-fun GoutouTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
-    val palette = if (dark) DarkPalette else LightPalette
+fun GoutouTheme(dark: Boolean? = null, content: @Composable () -> Unit) {
+    val isDark = dark ?: isSystemInDarkTheme()
+    val palette = if (isDark) DarkPalette else LightPalette
     CompositionLocalProvider(LocalPalette provides palette) {
         MaterialTheme(
-            colorScheme = if (dark) {
+            colorScheme = if (isDark) {
                 darkColorScheme(primary = palette.primary, background = palette.bgTop, surface = palette.glass)
             } else {
                 lightColorScheme(primary = palette.primary, background = palette.bgTop, surface = palette.glass)
