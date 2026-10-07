@@ -34,6 +34,15 @@ object Keys {
     const val SENSITIVE = "allow_sensitive"
     const val SCOPE_OK = "scope_ok"
     const val HEARTBEAT = "heartbeat_at"
+
+    /**
+     * 实时探测（App 问 → 注入侧答）：
+     * App 写 [PROBE_REQ]，微信进程下一轮读到就回一条广播，Receiver 记下 [PROBE_ACK] 与 [PROBE_INFO]。
+     * 「模块是否生效」以前只能看 [HEARTBEAT]（6 小时内有心跳就算），那回答的是「曾经跑过没」。
+     */
+    const val PROBE_REQ = "probe_req"
+    const val PROBE_ACK = "probe_ack"
+    const val PROBE_INFO = "probe_info"
     const val CALLS = "stat_calls"
     const val TOKENS = "stat_tokens"
     const val DIAG = "diag"
@@ -531,6 +540,19 @@ class ConfigStore(context: Context) {
     }
 
     fun heartbeatAt(): Long = sp.getLong(Keys.HEARTBEAT, 0L)
+
+    /**
+     * 实时探测（见 [Keys.PROBE_REQ]）。**「模块现在还在不在」只能这么问**：
+     * 心跳时间戳回答的是「曾经跑过没」（那是用户实测点出来的毛病）。
+     * 探测是双向的：这里写请求 → 微信进程回执 → [probeAck] 晚于 [probeAt] 才算「有人应」。
+     */
+    fun requestProbe() {
+        sp.edit().putLong(Keys.PROBE_REQ, System.currentTimeMillis()).apply()
+    }
+
+    fun probeAt(): Long = sp.getLong(Keys.PROBE_REQ, 0L)
+    fun probeAck(): Long = sp.getLong(Keys.PROBE_ACK, 0L)
+    fun probeInfo(): String = sp.getString(Keys.PROBE_INFO, "").orEmpty()
 
     /** 微信进程最近一次写回来的结构诊断（排查「读不到消息」用）。 */
     fun diag(): String = sp.getString(Keys.DIAG, "").orEmpty()

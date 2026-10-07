@@ -39,6 +39,8 @@ object Heartbeat {
         ocr: String? = null,
         /** 决策轨迹（ring buffer 渲染好的文本）：排查「读不到消息 / 卡片不弹」看它 */
         trace: String? = null,
+        /** 实时探测的回执（App 用它判断「模块现在还在不在」，见 Keys.PROBE_REQ） */
+        probe: String? = null,
     ) {
         try {
             val intent = Intent(ACTION).setPackage(MODULE_PKG).putExtra("tokens", tokens)
@@ -51,6 +53,7 @@ object Heartbeat {
             if (chatsInfo != null) intent.putExtra("chatsInfo", chatsInfo)
             if (ocr != null) intent.putExtra("ocr", ocr)
             if (trace != null) intent.putExtra("trace", trace)
+            if (probe != null) intent.putExtra("probe", probe)
             context.sendBroadcast(intent, PERMISSION)
         } catch (t: Throwable) {
             // 广播失败不影响主流程
@@ -94,6 +97,12 @@ class HeartbeatReceiver : BroadcastReceiver() {
         intent.getStringExtra("trace")?.let {
             editor.putString(Keys.TRACE, it)
             editor.putLong(Keys.TRACE_AT, System.currentTimeMillis())
+        }
+        // 实时探测的回执：记下「什么时候回的 + 当时在哪一屏」。
+        // 心跳时间戳也会被上面那行刷新 —— 但界面判定「现在还在不在」只认这一条。
+        intent.getStringExtra("probe")?.let {
+            editor.putLong(Keys.PROBE_ACK, System.currentTimeMillis())
+            editor.putString(Keys.PROBE_INFO, it)
         }
         // 会话名候选：给「白名单」页用。名字统一走 normalizeKey —— 微信标题常带未读数（张三(3)），
         // 而白名单里存的本来就是归一化过的 key，两边必须同一套，否则「拉回来却勾不上」。

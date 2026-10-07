@@ -48,7 +48,9 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextFieldColors
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -146,6 +148,43 @@ const val ChipBgAlpha = 0.14f
 /** 状态色 / 选中色的 1dp 描边透明度（批 4c 之前是 0.45 / 0.5 / 0.55 三档混用）。 */
 const val CardBorderAlpha = 0.35f
 
+/**
+ * 「玻璃强度」(`glassAlpha`) 只调**透**、不调**厚**（第 7 版玻璃重构）。
+ *
+ * 以前填充 / 描边 / 顶边 / 底边 / 扫光**全都乘**它，滑到最低档卡片就变成一张纸。
+ * 现在分三种走法：填充按 ±0.24 摆动且留底、描边衰减到 60% 就不再掉、
+ * 厚度（顶边 / 底边 / 阴影）**完全不乘**。
+ */
+fun fillAlpha(base: Float, g: Float): Float = (base + (g - 0.5f) * 0.24f).coerceIn(0f, 1f)
+fun edgeAlpha(base: Float, g: Float): Float = base * (0.6f + 0.4f * g)
+fun sweepAlpha(base: Float, g: Float): Float = base * (0.3f + 0.7f * g)
+
+/**
+ * 输入框统一样式：半透明填充 + 淡紫描边 + 聚焦加亮。
+ *
+ * 以前一个字段都没设 `colors` → 全走 Material3 默认（容器透明），落在近白的卡片上
+ * 就是一块白板（设计师点名的「白板第二大来源」）。数值见规范：浅色填充白 0.55 / 深色白 0.08。
+ */
+@Composable
+fun glassFieldColors(): TextFieldColors {
+    val palette = LocalPalette.current
+    return OutlinedTextFieldDefaults.colors(
+        focusedContainerColor = palette.fieldFill,
+        unfocusedContainerColor = palette.fieldFill,
+        focusedBorderColor = if (palette.dark) {
+            Color.White.copy(alpha = 0.40f)
+        } else {
+            palette.primary.copy(alpha = 0.70f)
+        },
+        unfocusedBorderColor = palette.fieldBorder,
+        focusedTextColor = palette.text,
+        unfocusedTextColor = palette.text,
+        focusedLabelColor = palette.primary,
+        unfocusedLabelColor = palette.sub,
+        cursorColor = palette.primary,
+    )
+}
+
 data class Palette(
     val primary: Color,
     val soft: Color,
@@ -154,6 +193,16 @@ data class Palette(
     val ok: Color,
     val warn: Color,
     val bad: Color,
+    /**
+     * 状态色的**图形档**（8dp 点 / chip 底色与描边 / 卡片描边 / hero 那个圈）。
+     *
+     * 为什么不复用 [ok]/[warn]/[bad]：浅色下同一支颜色当**文字**时对比度不够
+     * （实测 ok 2.7:1、warn 2.2:1，都低于 AA 的 4.5:1），所以拆两档 ——
+     * 上面那三个是**文字档**（更深），这三个是**图形档**（稍亮，配 8dp 点与 1dp 描边）。
+     */
+    val okMark: Color,
+    val warnMark: Color,
+    val badMark: Color,
     val bgTop: Color,
     /** 底色渐变的中间那一段。三段比两段更像「光」，不会是平涂。 */
     val bgMid: Color,
@@ -180,8 +229,37 @@ data class Palette(
      */
     val glassTint: Color,
     val glassBorder: Color,
-    val glassTopAlpha: Float,
-    val glassBottomAlpha: Float,
+
+    // ---- L1 主面板：填充 / 描边 / 厚度（第 7 版玻璃重构，数值全部来自设计师规范）----
+    /**
+     * 填充的上下两端颜色。浅色是**紫灰**（比背景更深、更紫 = 雾面亚克力），
+     * 深色是「带紫的白」—— 而不是「在近白底上再提白」（那正是白板读感的根因）。
+     */
+    val glassFillTop: Color,
+    val glassFillBottom: Color,
+    val glassFillTopAlpha: Float,
+    val glassFillBottomAlpha: Float,
+    /** 描边三停：左上高光 / 中段极淡 / **右下折射暗边**（有色；白→白读不出厚度）。 */
+    val glassEdgeHi: Color,
+    val glassEdgeHiAlpha: Float,
+    val glassEdgeMidAlpha: Float,
+    val glassEdgeLow: Color,
+    val glassEdgeLowAlpha: Float,
+    /** 顶边光源（厚度之一，**不乘 glassAlpha**）：1.5dp 白。 */
+    val glassTopEdgeAlpha: Float,
+    val glassTopEdgeDp: Float,
+    /** 底边反光 / 暗边（厚度之二，也不乘 glassAlpha）。 */
+    val glassBottomEdge: Color,
+    val glassBottomEdgeAlpha: Float,
+    /** 镜面扫光的基准 alpha（按 sweepAlpha(g) 走）。 */
+    val glassSweepAlpha: Float,
+    /** 外阴影（厚度之三，不乘 glassAlpha —— 乘了滑到最低档卡片会像贴在纸上）。 */
+    val glassShadow: Color,
+    val glassShadowAlpha: Float,
+    val glassShadowDp: Float,
+    /** 输入框：半透明填充 + 淡描边（以前用 M3 默认，落在近白卡上就是一块白板）。 */
+    val fieldFill: Color,
+    val fieldBorder: Color,
     val dark: Boolean,
 )
 
@@ -190,26 +268,48 @@ private val LightPalette = Palette(
     soft = Color(0xFFEDE7FA),
     text = Color(0xFF17161D),
     sub = Color(0xFF6B6878),
-    ok = Color(0xFF1FA463),
-    warn = Color(0xFFD9910A),
-    bad = Color(0xFFD64545),
-    bgTop = Color(0xFFF5F1FC),
-    bgMid = Color(0xFFEDE6FB),
-    bgBottom = Color(0xFFE7DFF7),
-    bgGlow = Color(0xFF7C3AED),
-    bgGlowAlpha = 0.10f,
-    bgVignette = Color(0xFF3B2E63),
-    bgVignetteAlpha = 0.07f,
-    bgGrain = Color(0xFF3A2C5E),
-    bgGrainAlpha = 0.030f,
-    bgLine = Color(0xFF7C3AED),
+    // 文字档：比原来深一档（原来是 #1FA463 / #D9910A / #D64545，浅紫底上只有 2~3:1）
+    ok = Color(0xFF0E6E43),
+    warn = Color(0xFF7A4F00),
+    bad = Color(0xFFB32828),
+    okMark = Color(0xFF178A52),
+    warnMark = Color(0xFFB07400),
+    badMark = Color(0xFFC93B3B),
+    // 背景整体加深加饱和：玻璃是「后面有起伏」才成立的，近白的底 + 白填充 = 一块白板
+    bgTop = Color(0xFFF2ECFC),
+    bgMid = Color(0xFFE2D7F7),
+    bgBottom = Color(0xFFD6C7F0),
+    bgGlow = Color(0xFF8B5CF6),
+    bgGlowAlpha = 0.20f,
+    bgVignette = Color(0xFF7C5AC0),
+    bgVignetteAlpha = 0.06f,
+    bgGrain = Color(0xFFFFFFFF),
+    bgGrainAlpha = 0.050f,
+    bgLine = Color(0xFF8B5CF6),
     bgLineAlpha = 0.035f,
     glass = Color(0xFFFFFFFF),
-    // L1 主面板：白 0.34 → 0.20（原来 0.62 → 0.42，几乎不透明）
     glassTint = Color(0xFFFFFFFF),
     glassBorder = Color(0xB3FFFFFF),
-    glassTopAlpha = 0.34f,
-    glassBottomAlpha = 0.20f,
+    // L1：紫灰雾面（比背景更深更紫），不再「在近白底上再提白」
+    glassFillTop = Color(0xFFF7F2FE),
+    glassFillBottom = Color(0xFFDACDF3),
+    glassFillTopAlpha = 0.62f,
+    glassFillBottomAlpha = 0.52f,
+    glassEdgeHi = Color(0xFFFFFFFF),
+    glassEdgeHiAlpha = 0.85f,
+    glassEdgeMidAlpha = 0.16f,
+    glassEdgeLow = Color(0xFFB79FE8),
+    glassEdgeLowAlpha = 0.30f,
+    glassTopEdgeAlpha = 0.75f,
+    glassTopEdgeDp = 1.5f,
+    glassBottomEdge = Color(0xFF8E6FD6),
+    glassBottomEdgeAlpha = 0.18f,
+    glassSweepAlpha = 0.10f,
+    glassShadow = Color(0xFF4C2C8C),
+    glassShadowAlpha = 0.14f,
+    glassShadowDp = 18f,
+    fieldFill = Color(0x8CFFFFFF),
+    fieldBorder = Color(0x47A58BD8),
     dark = false,
 )
 
@@ -218,14 +318,18 @@ private val DarkPalette = Palette(
     soft = Color(0xFF322A4D),
     text = Color(0xFFF2EFFA),
     sub = Color(0xFFA9A4BA),
+    // 深色下三支颜色两档都用同一支（实测对比度 4.6~5.8:1，都够）
     ok = Color(0xFF4FD296),
     warn = Color(0xFFF0B95B),
     bad = Color(0xFFFF8A8A),
+    okMark = Color(0xFF4FD296),
+    warnMark = Color(0xFFF0B95B),
+    badMark = Color(0xFFFF8A8A),
     bgTop = Color(0xFF221439),
     bgMid = Color(0xFF2B1B4D),
     bgBottom = Color(0xFF1B1230),
     bgGlow = Color(0xFF7C3AED),
-    bgGlowAlpha = 0.18f,
+    bgGlowAlpha = 0.22f,
     bgVignette = Color(0xFF000000),
     bgVignetteAlpha = 0.28f,
     bgGrain = Color(0xFFFFFFFF),
@@ -233,11 +337,28 @@ private val DarkPalette = Palette(
     bgLine = Color(0xFFFFFFFF),
     bgLineAlpha = 0.028f,
     glass = Color(0xFF2A2734),
-    // L1 主面板：白 0.16 → 0.08（深色下「白 0.08」就是设计师给的数）
     glassTint = Color(0xFFFFFFFF),
     glassBorder = Color(0x33FFFFFF),
-    glassTopAlpha = 0.16f,
-    glassBottomAlpha = 0.08f,
+    // 深色：上白下「带紫的白」—— 白 0.16 在深紫底上发灰，带紫才是有色玻璃
+    glassFillTop = Color(0xFFFFFFFF),
+    glassFillBottom = Color(0xFFB79CF0),
+    glassFillTopAlpha = 0.13f,
+    glassFillBottomAlpha = 0.06f,
+    glassEdgeHi = Color(0xFFFFFFFF),
+    glassEdgeHiAlpha = 0.55f,
+    glassEdgeMidAlpha = 0.10f,
+    glassEdgeLow = Color(0xFFC9B4FF),
+    glassEdgeLowAlpha = 0.26f,
+    glassTopEdgeAlpha = 0.55f,
+    glassTopEdgeDp = 1.5f,
+    glassBottomEdge = Color(0xFF000000),
+    glassBottomEdgeAlpha = 0.22f,
+    glassSweepAlpha = 0.085f,
+    glassShadow = Color(0xFF0B0616),
+    glassShadowAlpha = 0.45f,
+    glassShadowDp = 24f,
+    fieldFill = Color(0x14FFFFFF),
+    fieldBorder = Color(0x24FFFFFF),
     dark = true,
 )
 
@@ -268,25 +389,31 @@ data class Backdrop(
     val blur: Dp,
 )
 
-val LocalBackdrop = staticCompositionLocalOf {
-    Backdrop(
-        bitmap = null,
-        dim = 0f,
-        bgTop = Color(0xFFF5F1FC),
-        bgMid = Color(0xFFEDE6FB),
-        bgBottom = Color(0xFFE7DFF7),
-        bgGlow = Color(0xFF7C3AED),
-        bgGlowAlpha = 0.10f,
-        bgVignette = Color(0xFF3B2E63),
-        bgVignetteAlpha = 0.07f,
-        bgGrain = Color(0xFF3A2C5E),
-        bgGrainAlpha = 0.030f,
-        bgLine = Color(0xFF7C3AED),
-        bgLineAlpha = 0.035f,
-        primary = Color(0xFF7C3AED),
-        blur = 24.dp,
-    )
-}
+/**
+ * 把「当前配色 + 用户设置」拼成一份 [Backdrop] —— **全仓唯一一处映射**。
+ *
+ * 以前同样一组背景色写了三份（Palette / Backdrop 的构造处 / 这里的默认值），
+ * 改一处忘两处是迟早的事，索性都收进这个函数。
+ */
+fun backdropOf(palette: Palette, bitmap: ImageBitmap?, dim: Float, blur: Dp) = Backdrop(
+    bitmap = bitmap,
+    dim = dim,
+    bgTop = palette.bgTop,
+    bgMid = palette.bgMid,
+    bgBottom = palette.bgBottom,
+    bgGlow = palette.bgGlow,
+    bgGlowAlpha = palette.bgGlowAlpha,
+    bgVignette = palette.bgVignette,
+    bgVignetteAlpha = palette.bgVignetteAlpha,
+    bgGrain = palette.bgGrain,
+    bgGrainAlpha = palette.bgGrainAlpha,
+    bgLine = palette.bgLine,
+    bgLineAlpha = palette.bgLineAlpha,
+    primary = palette.primary,
+    blur = blur,
+)
+
+val LocalBackdrop = staticCompositionLocalOf { backdropOf(LightPalette, null, 0f, 24.dp) }
 
 /** 根容器尺寸（px）。玻璃面板靠它把整屏背景平移对齐到自己身上。 */
 val LocalRootSize = staticCompositionLocalOf { IntSize.Zero }
@@ -478,7 +605,8 @@ internal fun DrawScope.drawBackdropArt(
             brush = Brush.radialGradient(
                 colors = listOf(b.bgGlow.copy(alpha = b.bgGlowAlpha), Color.Transparent),
                 center = Offset(w * 0.72f, h * 0.12f),
-                radius = max(w * 1.10f, h * 0.55f),
+                // 半径 0.9W：光晕要「铺得开」才给玻璃一点可透的明暗起伏（原来 1.10W 太平）
+                radius = max(w * 0.90f, h * 0.45f),
             ),
             topLeft = Offset.Zero,
             size = Size(w, h),
@@ -619,23 +747,7 @@ private fun decodeImage(context: Context, uriStr: String): ImageBitmap? = try {
 @Composable
 fun rememberBackdrop(bgUri: String, dim: Float, blur: Float): Backdrop {
     val palette = LocalPalette.current
-    return Backdrop(
-        bitmap = decodeBackdrop(bgUri),
-        dim = dim,
-        bgTop = palette.bgTop,
-        bgMid = palette.bgMid,
-        bgBottom = palette.bgBottom,
-        bgGlow = palette.bgGlow,
-        bgGlowAlpha = palette.bgGlowAlpha,
-        bgVignette = palette.bgVignette,
-        bgVignetteAlpha = palette.bgVignetteAlpha,
-        bgGrain = palette.bgGrain,
-        bgGrainAlpha = palette.bgGrainAlpha,
-        bgLine = palette.bgLine,
-        bgLineAlpha = palette.bgLineAlpha,
-        primary = palette.primary,
-        blur = blur.dp,
-    )
+    return backdropOf(palette, decodeBackdrop(bgUri), dim, blur.dp)
 }
 
 @Composable
@@ -669,6 +781,8 @@ fun GlassSurface(
     glassAlpha: Float,
     modifier: Modifier = Modifier,
     borderColor: Color? = null,
+    /** R4 大面板（底栏那种「一整块板」）：填充更实、只留一条顶边光、不要全圈描边。 */
+    big: Boolean = false,
     tintTop: Float? = null,
     tintBottom: Float? = null,
     refract: Boolean = true,
@@ -685,8 +799,14 @@ fun GlassSurface(
     // 用布局实测值而不是 graphicsLayer 作用域里的 size —— 后者的类型随版本变，
     // 实测值既明确又一定是 px。
     var panel by remember { mutableStateOf(IntSize.Zero) }
-    val top = tintTop ?: (palette.glassTopAlpha * glassAlpha)
-    val bottom = tintBottom ?: (palette.glassBottomAlpha * glassAlpha)
+    // L2（卡内子块）自己传 tintTop/tintBottom，沿用白色染色（且调用方已经乘过 glassAlpha）；
+    // L1 主面板走新的紫灰填充，并按 fillAlpha 的公式随「玻璃强度」微调。
+    val l2 = tintTop != null || tintBottom != null
+    val boost = if (big) 0.08f else 0f
+    val top = if (l2) (tintTop ?: palette.glassFillTopAlpha) else fillAlpha(palette.glassFillTopAlpha + boost, glassAlpha)
+    val bottom = if (l2) (tintBottom ?: palette.glassFillBottomAlpha) else fillAlpha(palette.glassFillBottomAlpha + boost, glassAlpha)
+    val fillTop = if (l2) palette.glassTint else palette.glassFillTop
+    val fillBottom = if (l2) palette.glassTint else palette.glassFillBottom
     val sized = root.width > 0 && root.height > 0
     // 低档位连模糊都不做，只留半透明染色（弱机上 RenderEffect 的离屏模糊很贵）
     val hasImage = sized && backdrop.bitmap != null && backdrop.blur > 0.dp && quality != GlassQuality.LOW
@@ -732,10 +852,10 @@ fun GlassSurface(
                     },
             )
         }
-        // ② 玻璃染色
+        // ② 玻璃染色（L1 = 紫灰雾面 / L2 = 白）
         Spacer(
             Modifier.matchParentSize().background(
-                Brush.verticalGradient(listOf(palette.glassTint.copy(alpha = top), palette.glassTint.copy(alpha = bottom))),
+                Brush.verticalGradient(listOf(fillTop.copy(alpha = top), fillBottom.copy(alpha = bottom))),
             ),
         )
         // ③ 镜面扫光（liquidGL 的 specular）：一道很淡的斜光缓缓扫过。
@@ -749,7 +869,7 @@ fun GlassSurface(
                     drawRect(
                         brush = Brush.linearGradient(
                             0f to Color.Transparent,
-                            0.5f to Color.White.copy(alpha = 0.085f * glassAlpha),
+                            0.5f to Color.White.copy(alpha = sweepAlpha(palette.glassSweepAlpha, glassAlpha)),
                             1f to Color.Transparent,
                             start = Offset(cx - band, -size.height * 0.35f),
                             end = Offset(cx + band, size.height * 1.35f),
@@ -766,12 +886,12 @@ fun GlassSurface(
             Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .height(1.dp)
+                .height(palette.glassTopEdgeDp.dp)
                 .background(
                     Brush.horizontalGradient(
                         listOf(
                             Color.Transparent,
-                            Color.White.copy(alpha = 0.34f * glassAlpha),
+                            Color.White.copy(alpha = palette.glassTopEdgeAlpha),
                             Color.Transparent,
                         ),
                     ),
@@ -786,7 +906,7 @@ fun GlassSurface(
                     Brush.horizontalGradient(
                         listOf(
                             Color.Transparent,
-                            Color.White.copy(alpha = 0.07f * glassAlpha),
+                            palette.glassBottomEdge.copy(alpha = palette.glassBottomEdgeAlpha),
                             Color.Transparent,
                         ),
                     ),
@@ -794,23 +914,26 @@ fun GlassSurface(
         )
         content()
         // ⑤ 边缘：报错卡片之类沿用纯色描边；其余用「左上亮、右下暗」的斜面渐变当 bevel
-        Spacer(
-            Modifier.matchParentSize().border(
-                width = 1.dp,
-                brush = if (borderColor != null) {
-                    SolidColor(borderColor)
-                } else {
-                    Brush.linearGradient(
-                        0f to Color.White.copy(alpha = 0.60f * glassAlpha),
-                        0.45f to Color.White.copy(alpha = 0.08f * glassAlpha),
-                        1f to Color.White.copy(alpha = 0.34f * glassAlpha),
-                        start = Offset.Zero,
-                        end = Offset.Infinite,
-                    )
-                },
-                shape = shape,
-            ),
-        )
+        // 大面板（底栏）刻意不画全圈：圈出来反而显小气，只留上面那条顶边光
+        if (!big) {
+            Spacer(
+                Modifier.matchParentSize().border(
+                    width = 1.dp,
+                    brush = if (borderColor != null) {
+                        SolidColor(borderColor)
+                    } else {
+                        Brush.linearGradient(
+                            0f to palette.glassEdgeHi.copy(alpha = edgeAlpha(palette.glassEdgeHiAlpha, glassAlpha)),
+                            0.45f to Color.White.copy(alpha = edgeAlpha(palette.glassEdgeMidAlpha, glassAlpha)),
+                            1f to palette.glassEdgeLow.copy(alpha = edgeAlpha(palette.glassEdgeLowAlpha, glassAlpha)),
+                            start = Offset.Zero,
+                            end = Offset.Infinite,
+                        )
+                    },
+                    shape = shape,
+                ),
+            )
+        }
     }
 }
 
@@ -822,15 +945,24 @@ fun GlassCard(
     border: Color? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val palette = LocalPalette.current
+    val cardShape = RoundedCornerShape(RadiusR3)
     GlassSurface(
-        shape = RoundedCornerShape(RadiusR3),
+        shape = cardShape,
         glassAlpha = glassAlpha,
         borderColor = border,
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 8.dp)
-            // 一点点外投影：让卡片从彩色背景上「浮」起来，而不是贴上去
-            .shadow(5.dp, RoundedCornerShape(RadiusR3), clip = false),
+            // 外投影是「厚度」的一部分：**不乘 glassAlpha**（乘了滑到最低档就像贴在纸上），
+            // 颜色与强度按规范（浅色 y6/blur18 紫 / 深色 y8/blur24 近黑）
+            .shadow(
+                elevation = palette.glassShadowDp.dp,
+                shape = cardShape,
+                clip = false,
+                ambientColor = palette.glassShadow.copy(alpha = palette.glassShadowAlpha),
+                spotColor = palette.glassShadow.copy(alpha = palette.glassShadowAlpha),
+            ),
     ) {
         Column(Modifier.padding(20.dp), content = content)
     }
@@ -1144,7 +1276,15 @@ private fun NavBar(
     GlassSurface(
         shape = NavShape,
         glassAlpha = glassAlpha,
-        modifier = modifier.shadow(18.dp, NavShape, clip = false),
+        // R4 是一整块板：填充更实、只留一条顶边光（见 GlassSurface 的 big）
+        big = true,
+        modifier = modifier.shadow(
+            elevation = (palette.glassShadowDp + 10f).dp,
+            shape = NavShape,
+            clip = false,
+            ambientColor = palette.glassShadow.copy(alpha = palette.glassShadowAlpha),
+            spotColor = palette.glassShadow.copy(alpha = palette.glassShadowAlpha),
+        ),
     ) {
         Box(Modifier.fillMaxWidth().height(NavBarHeight)) {
             if (cellPx > 0f) {

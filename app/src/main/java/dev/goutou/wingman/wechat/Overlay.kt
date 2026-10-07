@@ -114,6 +114,18 @@ internal class Panel(private val a: Activity) {
     private var lastMsgs: List<ChatMsg> = emptyList()
     private var skipSensitiveFor = ""
     /**
+     * 「这一屏」的稳定身份：会话名 + 消息列表指纹 + 这几条消息的内容。
+     *
+     * **刻意不含角色档案 / 设置 / 说话风格** —— 那些东西每一轮都在长（[recordToRoles] 一直在往档案里补），
+     * 拿它们算出来的键下一轮就变了。而敏感闸门的「用户已经确认过这一屏」必须挂在一个**稳定**键上：
+     * 挂错键的后果就是「点了『仍然分析这一条』→ 下一轮又命中 → 弹回风险卡」，点几次都一样。
+     */
+    private var screenKey = ""
+    /** 敏感卡上一次渲染的那一批命中词：同一屏同一批就不再重建（重建会让它每轮闪一次，像卡死）。 */
+    private var sensitiveHits: List<String> = emptyList()
+    /** 这一屏为什么用不了（[showStuck] 写的）：卡片开着时直接摊给用户看。 */
+    private var stuckReason = ""
+    /**
      * 折叠 / 展开（默认折叠 —— 不打开的话，脸上就只有一个小按钮）。
      *
      * ⚠️ **只有三处允许改动它**：
@@ -138,6 +150,8 @@ internal class Panel(private val a: Activity) {
     private var lastTraceVer = -1
     private var lastTraceAt = 0L
     private var lastDiagReq = 0L
+    /** 已经回执过的那个探测请求（见 [maybeAnswerProbe]）。 */
+    private var lastProbeReq = 0L
     private var emptyNotified = false
     /** 「白名单开着但认不出这个会话的名字」只提示一次，免得每屏都弹。 */
     private var whitelistNameNotified = false
@@ -277,6 +291,10 @@ internal class Panel(private val a: Activity) {
 
         decor.addView(card, matchTop(dp(10), dp(96), dp(10)))
         decor.addView(chip, wrapTopEnd(dp(10), dp(96)))
+        // 探测轮询从这里起步（**刻意不放在 onResume**）：微信切到后台时 ticker 是停的，
+        // 但微信进程还活着 —— 探测挂在 ticker 上就会得到「没回应」的假警报。
+        handler.removeCallbacks(prober)
+        handler.postDelayed(prober, PROBE_POLL_MS)
         attached = true
     }
 
@@ -368,8 +386,18 @@ internal class Panel(private val a: Activity) {
         // 而后面的早退分支一个比一个苛刻 —— 挡在哪儿都会让请求石沉大海，用户那边只看到「没反应」。
         maybePullConversations(decor)
 
+        // App 的实时探测：位置同样在所有早退之前 —— 「这一屏读不出来」时最需要知道模块还活着。
+        maybeAnswerProbe()
+
         if (!decor.hasWindowFocus()) {
-            Trace.note("焦点", "窗口没焦点（微信不在前台，或被别的窗口盖着）")
+            // 没焦点通常什么都不做 —— 但「有些对话连气泡都不出现」就是从这类早退里溜走的：
+            // 只要这一屏**确实是个聊天页**（找得到输入框），就留一个能点的按钮，把原因写在上面。
+            if (reader.findChatInput(decor) != null) {
+                Trace.note("焦点", "窗口没焦点，但这一屏是聊天页 → 留一个按钮说明情况")
+                showStuck("军师 · 窗口没焦点", "现在读不了这一屏：微信不在前台，或者被别的窗口盖着。\n回到微信这一页停一下就恢复。")
+            } else {
+                Trace.note("焦点", "窗口没焦点（微信不在前台，或被别的窗口盖着）")
+            }
             return
         }
 
@@ -399,10 +427,23 @@ internal class Panel(private val a: Activity) {
                         "（判定要求 宽>${dp(50)}、位于屏幕下 70%、isShown）",
                 )
             }
-            hideAll()
+            // 这是「有些对话连气泡都不出现」的老根因：以前不管这一屏是不是聊天页，一律 hideAll()，
+            // 屏幕上就什么都不剩了 —— 用户既看不到状态，也没法自查。
+            // 现在：屏幕上还有「像输入框」的控件（= 这确实是个聊天页）就留一个按钮说明情况；
+            // 真的是别的页面（通讯录 / 朋友圈…）才整块藏掉。
+            if (cand0 != null) {
+                showStuck(
+                    "军师 · 读不到这一屏",
+                    "这一屏看着像聊天页，但读不到能用的输入框（微信可能改了控件）。\n" +
+                        "诊断已经记下来了 —— 长按标题可以再生成一份。",
+                )
+            } else {
+                hideAll()
+            }
             return
         }
         onChat = true
+        stuckReason = ""
         if (!reloadConfig()) {
             Trace.note("配置", "读不到配置（prefs 为空）：模块没启用，或没勾选微信")
             return
@@ -518,6 +559,11 @@ internal class Panel(private val a: Activity) {
         }
         // 到这儿每张图都已经有确定结果了（认到的文字 / 确实没字 / 失败冷却），解析只是个纯查询
         val msgs = parser.parse(rows) { img -> ocr.textOf(img) }.takeLast(cfg.ctx)
+        // 「这一屏」的稳定键：只跟**看得见的内容**有关。敏感确认、「跳过」类判定都以它为准。
+        screenKey = conversationDigest(
+            observedName, reader.fingerprint(list),
+            *msgs.map { conversationDigest(it.fromMe.toString(), it.text) }.toTypedArray(),
+        )
         // 只记**条数和方向**，不记正文：轨迹会顺着心跳回传、常驻 App 本地，
         // 不该比诊断包更容易泄露聊天内容。一条都没解析出来时这一条不记 —— 紧接着的「空」会说清楚。
         if (msgs.isNotEmpty()) {
@@ -641,7 +687,10 @@ internal class Panel(private val a: Activity) {
         }
 
         val joined = msgs.joinToString("\n") { it.text }
-        val hits = if (cfg.allowSensitive || requestKey == skipSensitiveFor) emptyList() else Sensitive.hits(joined)
+        // 用户点过「仍然分析这一条」→ 这一屏不再拦。
+        // ⚠️ 判定必须用 [screenKey]（屏稳定），**不能用 requestKey**：requestKey 里含角色档案，
+        // 而档案每轮都在变 → 上一轮记下的键永远对不上 → 每轮重新命中，点多少次都弹回风险卡。
+        val hits = if (cfg.allowSensitive || screenKey == skipSensitiveFor) emptyList() else Sensitive.hits(joined)
         if (hits.isNotEmpty()) {
             Trace.note("敏感", "命中敏感词：${hits.joinToString("、")} → 只提示，不外发")
             renderSensitive(hits)
@@ -699,6 +748,38 @@ internal class Panel(private val a: Activity) {
      * **每一步都要回话**：收到请求先回执、读之前先说在读哪一屏、读不出说为什么、抛异常也回一句。
      * 因为「请求没送到」和「送到了但没读出名字」的排查方向完全相反，不给回执就只能瞎猜。
      */
+    /**
+     * 「App 问一句，回一句」—— 实时探测。
+     *
+     * 用户实测点过的问题：App 里显示的「模块状态」其实是「**曾经**在微信里跑过没有」。
+     * 真正该回答的是「**现在**还在不在」，所以改成双向探测：App 写请求 → 这里回执 → 界面显示
+     * 「x 秒前回过话 / 没回应」。
+     *
+     * 和 ticker 分开跑：[ticker] 在 onPause 就停了，而微信进程还活着。探测也挂在 ticker 上的话，
+     * 用户在 App 里点探测会拿到假警报。这条低频轮询只做一次 SharedPreferences 读，很轻。
+     */
+    private val prober = object : Runnable {
+        override fun run() {
+            runCatching { maybeAnswerProbe() }
+            handler.postDelayed(this, PROBE_POLL_MS)
+        }
+    }
+
+    /** 看到新的探测请求就回执（带上「当时在哪一屏」+ 微信版本，App 那边直接显示）。 */
+    private fun maybeAnswerProbe() {
+        refreshPrefs()
+        val req = prefs?.getLong(Keys.PROBE_REQ, 0L) ?: 0L
+        if (req <= lastProbeReq) return
+        lastProbeReq = req
+        val ver = runCatching {
+            a.packageManager.getPackageInfo("com.tencent.mm", 0).versionName
+        }.getOrNull().orEmpty()
+        Heartbeat.send(
+            a, 0,
+            probe = "页面=" + a.javaClass.simpleName + (if (ver.isBlank()) "" else " · 微信 $ver"),
+        )
+    }
+
     private fun maybePullConversations(decor: View) {
         val c = config
         val req = prefs?.getLong(Keys.CHAT_REQ, 0L) ?: 0L
@@ -1257,6 +1338,12 @@ internal class Panel(private val a: Activity) {
 
     private fun renderSensitive(hits: List<String>) {
         hasResult = true
+        // 同一屏、同一批命中词、卡片已经摆着 → 不重建。重建会让卡片每轮闪一次，看着像死循环。
+        if (expanded && sensitiveHits == hits && bodyBox.childCount > 0) {
+            setChip("⚠ 敏感内容 · 点开看", 0xE6C97A00.toInt())
+            return
+        }
+        sensitiveHits = hits
         title.text = "⚠ 这条含敏感内容"
         title.setTextColor(colorWarn)
         bodyBox.removeAllViews()
@@ -1268,8 +1355,10 @@ internal class Panel(private val a: Activity) {
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
         go.setOnClickListener {
-            skipSensitiveFor = lastFingerprint
+            // 记住「这一屏已被你放行」：用屏稳定键，点一次就一直有效（换了屏 / 换了会话自然失效）
+            skipSensitiveFor = screenKey
             force = true
+            Trace.note("敏感", "用户点了「仍然分析这一条」→ 这一屏放行（不再拦）")
             handler.post { runCatching { tick() } }
         }
         bodyBox.addView(go, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
@@ -1396,8 +1485,39 @@ internal class Panel(private val a: Activity) {
         noListTicks = 0
         expanded = false
         hasResult = false
+        stuckReason = ""
         card.visibility = View.GONE
         chip.visibility = View.GONE
+    }
+
+    /**
+     * 「人在聊天页，但这一屏读不了」：**绝不把 card + chip 一起藏掉**。
+     *
+     * 用户实测抱怨过「有些对话连展开前的小气泡都不出现」和「出了结果又折叠、点不开了」——
+     * 根因就是以前这种时候直接 [hideAll]：屏幕上什么都不剩，用户既看不到状态、也没法自查。
+     * 现在永远留一个**能点的折叠按钮**（点一下把原因摊出来），按钮文案本身也说明了情况。
+     *
+     * 刻意不动 [expanded]（用户开着就开着），也不作废在飞的请求 —— 这一屏只是「读不出来」，不是「走了」。
+     */
+    private fun showStuck(chip: String, reason: String) {
+        onChat = true // 折叠按钮的可见性要求 onChat
+        stuckReason = reason
+        hasResult = false
+        setChip(chip, 0xE6C97A00.toInt())
+        if (expanded) renderStuck()
+    }
+
+    /** 把「这一屏为什么用不了」摊进卡片（点开按钮就能看到，也能把诊断拿到手）。 */
+    private fun renderStuck() {
+        title.text = "军师 · 这一屏用不了"
+        title.setTextColor(colorWarn)
+        bodyBox.removeAllViews()
+        bodyBox.addView(label(stuckReason, 13f, colorSub))
+        bodyBox.addView(
+            label("长按标题可以生成一份诊断；App 首页「诊断」卡片里能复制出来发我。", 13f, colorSub) {
+                setPadding(0, dp(6), 0, 0)
+            },
+        )
     }
 
     private fun lastThree(msgs: List<ChatMsg>): String =
@@ -1450,6 +1570,14 @@ internal class Panel(private val a: Activity) {
 
 /** 「被动收集会话名」的最小间隔：那一屏每 2.6 秒 tick 一次，没必要次次都读整棵视图树。 */
 private const val CONV_PULL_MIN_MS = 15_000L
+
+/**
+ * 实时探测的轮询间隔。
+ *
+ * 为什么单独一条轮询：微信切到后台时 [Panel] 的 ticker 会停（onPause），但微信进程还在 ——
+ * 探测要是挂在 ticker 上，用户在 App 里一点就是「没回应」。6 秒一次、只读一次 SharedPreferences，
+ * 换来「App 问一句，微信那边一定有人应」。 */
+private const val PROBE_POLL_MS = 6_000L
 
 /**
  * 「点一下聊天页那个折叠按钮」该干什么。

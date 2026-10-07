@@ -52,6 +52,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -120,8 +121,21 @@ private enum class Level(val label: String) { OK("通过"), WARN("待确认"), B
 
 private data class Check(val title: String, val desc: String, val level: Level, val onClick: (() -> Unit)? = null)
 
-/** 状态等级 → 状态色。批 4c：状态色只有这一个出口，别再各写一份 when。 */
+/**
+ * 状态等级 → **图形档**状态色（8dp 点 / hero 那个圈 / 卡片描边）。
+ *
+ * 批 4c：状态色只有这一个出口，别再各写一份 when。
+ * 第 7 版又拆了一档：浅色下当**文字**用对比度不够（warn 只有 2.2:1），所以图形用 [Palette.okMark]
+ * 这一组，文字用 [levelText] 那一组（更深）。
+ */
 private fun levelColor(palette: Palette, level: Level): Color = when (level) {
+    Level.OK -> palette.okMark
+    Level.WARN -> palette.warnMark
+    Level.BAD -> palette.badMark
+}
+
+/** 状态等级 → **文字档**状态色（正文里那行说明）。 */
+private fun levelText(palette: Palette, level: Level): Color = when (level) {
     Level.OK -> palette.ok
     Level.WARN -> palette.warn
     Level.BAD -> palette.bad
@@ -268,7 +282,7 @@ private fun CheckRow(check: Check, glassAlpha: Float) {
                 Text(check.title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(check.desc, fontSize = 13.sp, color = palette.sub)
             }
-            Text(check.level.label, fontSize = 13.sp, color = color, fontWeight = FontWeight.Medium)
+            Text(check.level.label, fontSize = 13.sp, color = levelText(palette, check.level), fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -321,6 +335,9 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
     var cfg by remember { mutableStateOf(store.load()) }
     val usage = remember(tick) { store.usage() }
     val beat = remember(tick) { store.heartbeatAt() }
+    val probeReqAt = remember(tick) { store.probeAt() }
+    val probeAckAt = remember(tick) { store.probeAck() }
+    val probeWhere = remember(tick) { store.probeInfo() }
     var probeVerdict by remember { mutableStateOf<String?>(null) }
     var probeDetail by remember { mutableStateOf<String?>(null) }
     var probeOk by remember { mutableStateOf(false) }
@@ -334,6 +351,43 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
     val fresh = beat > 0 && System.currentTimeMillis() - beat < 6 * 3600_000L
     val confirmed = store.scopeConfirmed()
 
+    // 实时探测的结论（问题 5）：模块「现在还在不在」只认这条，心跳时间戳退居「历史」。
+    val nowMs = System.currentTimeMillis()
+    val liveText: String
+    val liveLevel: Level
+    when {
+        probeAckAt > 0 && probeAckAt >= probeReqAt -> {
+            val secs = (nowMs - probeAckAt) / 1000
+            liveText = "刚刚回过话：${secs} 秒前" + if (probeWhere.isBlank()) "" else " · $probeWhere"
+            liveLevel = if (nowMs - probeAckAt < 60_000L) Level.OK else Level.WARN
+        }
+        probeReqAt > 0 && nowMs - probeReqAt < 10_000L -> {
+            liveText = "已发出探测，正在等微信进程回话…（要微信在运行）"
+            liveLevel = Level.WARN
+        }
+        probeReqAt > 0 -> {
+            liveText = "探测没有回应（${formatTime(probeReqAt)}）—— 确认微信在运行、作用域勾了微信，再强杀微信重开；也可以点这一行重试"
+            liveLevel = Level.BAD
+        }
+        else -> {
+            liveText = "还没探测过 —— 点这一行探测一下（会在微信进程里跑一轮再回话）"
+            liveLevel = Level.WARN
+        }
+    }
+
+    // 进这一页自动探一次；等回话的那十几秒里每秒刷一下。
+    // 有界轮询（repeat 12 次）—— 无限协程会把截图回归测试挂住（这个坑踩过）。
+    LaunchedEffect(Unit) {
+        store.requestProbe()
+        tick++
+    }
+    LaunchedEffect(probeAckAt >= probeReqAt) {
+        if (probeAckAt < probeReqAt) repeat(12) {
+            kotlinx.coroutines.delay(1000)
+            tick++
+        }
+    }
+
     val checks = listOf(
         Check(
             "模块激活",
@@ -341,7 +395,16 @@ fun StatusScreen(store: ConfigStore, onTrial: () -> Unit) {
             if (active) Level.OK else Level.BAD,
         ),
         Check(
-            "微信内已生效",
+            "模块是否在跑（实时探测）",
+            liveText,
+            liveLevel,
+        ) {
+            // 点这一行 = 重新探一次
+            store.requestProbe()
+            tick++
+        },
+        Check(
+            "微信内已生效（历史）",
             when {
                 fresh -> "微信进程最近报过心跳：${formatTime(beat)}"
                 confirmed -> "你手动确认过（还没收到心跳）"
@@ -621,6 +684,8 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
         ScreenHeader("试一试", "粘贴聊天 · 预览回复 · 验证接口")
         GlassCard(glassAlpha) {
             OutlinedTextField(
+                colors = glassFieldColors(),
+                shape = RoundedCornerShape(RadiusR2),
                 value = input,
                 onValueChange = { input = it },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 130.dp),
@@ -679,7 +744,7 @@ fun TrialScreen(store: ConfigStore, glassAlpha: Float) {
                 colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
             ) { Text(if (loading) "思考中…" else "生成候选回复") }
         }
-        error?.let { msg -> GlassCard(glassAlpha, border = palette.bad.copy(alpha = CardBorderAlpha)) { Text(msg, color = palette.bad, fontSize = 13.sp) } }
+        error?.let { msg ->             GlassCard(glassAlpha, border = palette.badMark.copy(alpha = CardBorderAlpha)) { Text(msg, color = palette.bad, fontSize = 13.sp) } }
         info?.let { GlassCard(glassAlpha) { Text(it, fontSize = 13.sp, color = palette.sub) } }
         suggestion?.let { s ->
             GlassCard(glassAlpha) {
@@ -844,6 +909,8 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
+                    colors = glassFieldColors(),
+                    shape = RoundedCornerShape(RadiusR2),
                     value = text,
                     onValueChange = { text = it },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 280.dp),
@@ -903,6 +970,8 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                 if (tweak) {
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
+                        colors = glassFieldColors(),
+                        shape = RoundedCornerShape(RadiusR2),
                         value = text,
                         onValueChange = { text = it },
                         modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp),
@@ -980,6 +1049,8 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
+                    colors = glassFieldColors(),
+                    shape = RoundedCornerShape(RadiusR2),
                     value = url,
                     onValueChange = { url = it },
                     modifier = Modifier.fillMaxWidth(),
@@ -1530,6 +1601,8 @@ fun AdvancedScreen(
             Text("接口地址", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
+                colors = glassFieldColors(),
+                shape = RoundedCornerShape(RadiusR2),
                 value = d.baseUrl,
                 onValueChange = { update(d.copy(baseUrl = it)) },
                 modifier = Modifier.fillMaxWidth(),
@@ -1538,6 +1611,8 @@ fun AdvancedScreen(
             )
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
+                colors = glassFieldColors(),
+                shape = RoundedCornerShape(RadiusR2),
                 value = d.apiKey,
                 onValueChange = { update(d.copy(apiKey = it)) },
                 modifier = Modifier.fillMaxWidth(),
@@ -1547,6 +1622,8 @@ fun AdvancedScreen(
             )
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
+                colors = glassFieldColors(),
+                shape = RoundedCornerShape(RadiusR2),
                 value = d.model,
                 onValueChange = { update(d.copy(model = it)) },
                 modifier = Modifier.fillMaxWidth(),
@@ -1710,6 +1787,8 @@ fun AdvancedScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
+                    colors = glassFieldColors(),
+                    shape = RoundedCornerShape(RadiusR2),
                     value = d.proxyPort.toString(),
                     onValueChange = { update(d.copy(proxyPort = it.toIntOrNull() ?: d.proxyPort)) },
                     modifier = Modifier.fillMaxWidth(),
@@ -1812,6 +1891,8 @@ fun AdvancedScreen(
                 Text("第二套接口（只给「风险评估」那一路用）", fontSize = 13.sp, color = palette.sub)
                 Spacer(Modifier.height(6.dp))
                 OutlinedTextField(
+                    colors = glassFieldColors(),
+                    shape = RoundedCornerShape(RadiusR2),
                     value = d.baseUrl2,
                     onValueChange = { update(d.copy(baseUrl2 = it)) },
                     modifier = Modifier.fillMaxWidth(),
@@ -1820,6 +1901,8 @@ fun AdvancedScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
+                    colors = glassFieldColors(),
+                    shape = RoundedCornerShape(RadiusR2),
                     value = d.apiKey2,
                     onValueChange = { update(d.copy(apiKey2 = it)) },
                     modifier = Modifier.fillMaxWidth(),
@@ -1829,6 +1912,8 @@ fun AdvancedScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
+                    colors = glassFieldColors(),
+                    shape = RoundedCornerShape(RadiusR2),
                     value = d.model2,
                     onValueChange = { update(d.copy(model2 = it)) },
                     modifier = Modifier.fillMaxWidth(),
@@ -1948,6 +2033,8 @@ fun AdvancedScreen(
         GlassCard(d.glassAlpha) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
+                    colors = glassFieldColors(),
+                    shape = RoundedCornerShape(RadiusR2),
                     value = d.ctx.toString(),
                     onValueChange = { update(d.copy(ctx = it.toIntOrNull() ?: d.ctx)) },
                     modifier = Modifier.weight(1f),
@@ -1956,6 +2043,8 @@ fun AdvancedScreen(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
                 OutlinedTextField(
+                    colors = glassFieldColors(),
+                    shape = RoundedCornerShape(RadiusR2),
                     value = d.minIntervalSec.toString(),
                     onValueChange = { update(d.copy(minIntervalSec = it.toIntOrNull() ?: d.minIntervalSec)) },
                     modifier = Modifier.weight(1f),
@@ -1966,6 +2055,8 @@ fun AdvancedScreen(
             }
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
+                colors = glassFieldColors(),
+                shape = RoundedCornerShape(RadiusR2),
                 value = d.temperature.toString(),
                 onValueChange = { update(d.copy(temperature = it.toDoubleOrNull() ?: d.temperature)) },
                 modifier = Modifier.fillMaxWidth(),
@@ -2087,6 +2178,8 @@ fun AdvancedScreen(
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
+                        colors = glassFieldColors(),
+                        shape = RoundedCornerShape(RadiusR2),
                         value = newChat,
                         onValueChange = { newChat = it },
                         modifier = Modifier.weight(1f),
@@ -2412,6 +2505,8 @@ fun ChatCandidatesScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
+                    colors = glassFieldColors(),
+                    shape = RoundedCornerShape(RadiusR2),
                     value = query,
                     onValueChange = {
                         query = it
@@ -2660,6 +2755,8 @@ private fun GeoCard(store: ConfigStore, glassAlpha: Float) {
         }
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
+            colors = glassFieldColors(),
+            shape = RoundedCornerShape(RadiusR2),
             value = d.geoEndpoint,
             onValueChange = { d = d.copy(geoEndpoint = it) },
             modifier = Modifier.fillMaxWidth(),
@@ -2740,7 +2837,7 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
         }
 
         if (trace.isNotBlank()) {
-            GlassCard(glassAlpha, border = palette.ok.copy(alpha = CardBorderAlpha)) {
+            GlassCard(glassAlpha, border = palette.okMark.copy(alpha = CardBorderAlpha)) {
                 Text("决策轨迹（每一轮读到什么、停在哪一步）", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "更新于 ${formatTime(traceAt)} · 卡片不弹时先看它：注入侧每一轮都留一条，" +
@@ -2769,7 +2866,7 @@ fun DiagScreen(store: ConfigStore, glassAlpha: Float, onBack: () -> Unit) {
         }
 
         if (diag.isNotBlank()) {
-            GlassCard(glassAlpha, border = palette.warn.copy(alpha = CardBorderAlpha)) {
+            GlassCard(glassAlpha, border = palette.warnMark.copy(alpha = CardBorderAlpha)) {
                 Text("诊断（来自微信进程）", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.text)
                 Text(
                     "生成于 ${formatTime(diagAt)} · 排查「读不到消息 / 全是图片」时把它复制给对方",
@@ -2892,7 +2989,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                 glassAlpha,
                 // 批 4c：卡片描边只表达「本人 = 绿」这一件事（原来「没写关系」也染一道紫，
                 // 紫色当成了「正常」用，跟状态语义打架）。关系没写靠下面那行琥珀文字说。
-                border = if (self) palette.ok.copy(alpha = CardBorderAlpha) else null,
+                border = if (self) palette.okMark.copy(alpha = CardBorderAlpha) else null,
             ) {
                 Column(
                     Modifier.fillMaxWidth().combinedClickable(
@@ -2903,7 +3000,7 @@ fun RolesScreen(store: ConfigStore, glassAlpha: Float, open: String?, onOpen: (S
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (self) {
-                            StatusDot(palette.ok)
+                            StatusDot(palette.okMark)
                         }
                         Text(
                             role.name,
@@ -3033,6 +3130,8 @@ private fun RoleDetail(
             }
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(
+                colors = glassFieldColors(),
+                shape = RoundedCornerShape(RadiusR2),
                 value = note,
                 onValueChange = { note = it },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
@@ -3132,6 +3231,8 @@ private fun RoleDetail(
             text = {
                 Column {
                     OutlinedTextField(
+                        colors = glassFieldColors(),
+                        shape = RoundedCornerShape(RadiusR2),
                         value = draft,
                         onValueChange = { draft = it },
                         modifier = Modifier.fillMaxWidth(),
@@ -3286,7 +3387,7 @@ private fun SelfStyleDetail(store: ConfigStore, glassAlpha: Float) {
         }
 
         item {
-            GlassCard(glassAlpha, border = if (on) palette.ok.copy(alpha = CardBorderAlpha) else null) {
+            GlassCard(glassAlpha, border = if (on) palette.okMark.copy(alpha = CardBorderAlpha) else null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(
