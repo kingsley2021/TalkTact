@@ -140,6 +140,14 @@ data class Palette(
     val bgLine: Color,
     val bgLineAlpha: Float,
     val glass: Color,
+    /**
+     * 玻璃面板的**染色**用色：两种明暗都是白。
+     *
+     * 低 alpha 的白才是「玻璃反光」；而 [glass] 是给 Material surface 用的**实色**
+     * （深色下是深灰 #2A2734）—— 拿它按 0.7 铺满整张卡，卡片就变成一块不透明的板，
+     * 这正是「一圈玻璃包着一块板」读感的来源。
+     */
+    val glassTint: Color,
     val glassBorder: Color,
     val glassTopAlpha: Float,
     val glassBottomAlpha: Float,
@@ -166,9 +174,10 @@ private val LightPalette = Palette(
     bgLine = Color(0xFF7C3AED),
     bgLineAlpha = 0.035f,
     glass = Color(0xFFFFFFFF),
-    glassBorder = Color(0xB3FFFFFF),
-    glassTopAlpha = 0.62f,
-    glassBottomAlpha = 0.42f,
+    // L1 主面板：白 0.34 → 0.20（原来 0.62 → 0.42，几乎不透明）
+    glassTint = Color(0xFFFFFFFF),
+    glassTopAlpha = 0.34f,
+    glassBottomAlpha = 0.20f,
     dark = false,
 )
 
@@ -192,9 +201,10 @@ private val DarkPalette = Palette(
     bgLine = Color(0xFFFFFFFF),
     bgLineAlpha = 0.028f,
     glass = Color(0xFF2A2734),
-    glassBorder = Color(0x33FFFFFF),
-    glassTopAlpha = 0.72f,
-    glassBottomAlpha = 0.52f,
+    // L1 主面板：白 0.16 → 0.08（深色下「白 0.08」就是设计师给的数）
+    glassTint = Color(0xFFFFFFFF),
+    glassTopAlpha = 0.16f,
+    glassBottomAlpha = 0.08f,
     dark = true,
 )
 
@@ -692,7 +702,7 @@ fun GlassSurface(
         // ② 玻璃染色
         Spacer(
             Modifier.matchParentSize().background(
-                Brush.verticalGradient(listOf(palette.glass.copy(alpha = top), palette.glass.copy(alpha = bottom))),
+                Brush.verticalGradient(listOf(palette.glassTint.copy(alpha = top), palette.glassTint.copy(alpha = bottom))),
             ),
         )
         // ③ 镜面扫光（liquidGL 的 specular）：一道很淡的斜光缓缓扫过。
@@ -716,7 +726,9 @@ fun GlassSurface(
                 },
             )
         }
-        // ④ 顶边一条极淡的高光
+        // ④ 上光源：顶边一条高光 + 底边一条极淡的反光。
+        //    设计师原话「顶边白 0.20、底边白 0.04 —— 这一条最出质感」：有它才像一块悬着的玻璃，
+        //    而不是一块平板嵌在框里。降低染色 alpha 之后，这一条就是「这还是玻璃」的主要凭据。
         Spacer(
             Modifier
                 .align(Alignment.TopCenter)
@@ -726,7 +738,22 @@ fun GlassSurface(
                     Brush.horizontalGradient(
                         listOf(
                             Color.Transparent,
-                            Color.White.copy(alpha = 0.40f * glassAlpha),
+                            Color.White.copy(alpha = 0.34f * glassAlpha),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
+        Spacer(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            Color.Transparent,
+                            Color.White.copy(alpha = 0.07f * glassAlpha),
                             Color.Transparent,
                         ),
                     ),
@@ -770,7 +797,7 @@ fun GlassCard(
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 5.dp)
             // 一点点外投影：让卡片从彩色背景上「浮」起来，而不是贴上去
-            .shadow(10.dp, RoundedCornerShape(22.dp), clip = false),
+            .shadow(5.dp, RoundedCornerShape(22.dp), clip = false),
     ) {
         Column(Modifier.padding(16.dp), content = content)
     }
@@ -792,8 +819,8 @@ fun GlassPill(text: String, selected: Boolean, modifier: Modifier = Modifier, on
                 } else {
                     Brush.verticalGradient(
                         listOf(
-                            palette.glass.copy(alpha = 0.30f),
-                            palette.glass.copy(alpha = 0.16f),
+                            palette.glassTint.copy(alpha = 0.16f),
+                            palette.glassTint.copy(alpha = 0.09f),
                         ),
                     )
                 },
@@ -833,7 +860,7 @@ fun StatCell(big: String, small: String, modifier: Modifier = Modifier) {
     Column(
         modifier
             .clip(RoundedCornerShape(16.dp))
-            .background(palette.glass.copy(alpha = 0.22f))
+            .background(palette.glassTint.copy(alpha = 0.10f))
             .padding(vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {

@@ -942,7 +942,7 @@ fun MentorScreen(store: ConfigStore, glassAlpha: Float, onSaved: () -> Unit) {
                             .fillMaxWidth()
                             .padding(top = 10.dp)
                             .clip(RoundedCornerShape(16.dp))
-                            .background(palette.glass.copy(alpha = if (selected) 0.30f else 0.14f))
+                            .background(palette.glassTint.copy(alpha = if (selected) 0.18f else 0.09f))
                             .clickable {
                                 store.save(store.load().copy(prompt = skill.prompt, skillId = skill.id, maxTokens = 0))
                                 cfg = store.load()
@@ -3382,7 +3382,7 @@ private fun SelfStyleDetail(store: ConfigStore, glassAlpha: Float) {
                             .padding(top = 4.dp)
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .background(palette.glass.copy(alpha = 0.22f))
+                            .background(palette.glassTint.copy(alpha = 0.10f))
                             .padding(10.dp),
                     )
                 }
