@@ -982,6 +982,12 @@ internal class ViewReader(private val a: Activity) {
                 val blocked = if (includeInvisible) v.visibility == View.GONE else !v.isShown
                 if (blocked) continue
             }
+            // **跳过我们自己的浮层**（卡片 / 折叠按钮）：它挂在 decor 上，整棵树一遍历就会被
+            // 「找聊天标题」「找消息列表」当成候选。用户那份轨迹里读到的新标题就是卡片自己的字
+            // （「正在读这一屏、调接口…」）→ 会话名在「真名」和「卡片文字」之间来回跳 →
+            // 每 1~2 秒被判成换了一次会话 → 反复重置 + 反复请求模型（还会被服务商限流）。
+            // 认 tag 就够；continue 之后不再把子视图压栈，等于整棵子树跳过。
+            if (v !== root && v.getTag() === OVERLAY_TAG) continue
             action(v)
             if (v is ViewGroup) {
                 for (i in v.childCount - 1 downTo 0) stack.addLast(v.getChildAt(i))
@@ -1035,3 +1041,12 @@ internal class ViewReader(private val a: Activity) {
 
     }
 }
+
+/**
+ * 我们自己的浮层标记（[Panel] 的卡片与折叠按钮都会打上它）。
+ *
+ * 为什么要这个：浮层是 `addView` 到 decor 上的，而所有识别（聊天标题 / 消息列表 / 输入框）
+ * 都在遍历整棵树 —— 不排除就会「自己认自己」：用户实测里模块把**卡片上的字**读成了会话标题，
+ * 于是会话名反复跳、每 1~2 秒重置一次上下文、反复请求模型。
+ */
+internal const val OVERLAY_TAG = "talktact.overlay"

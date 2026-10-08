@@ -312,6 +312,9 @@ internal class Panel(private val a: Activity) {
         chip.visibility = View.GONE
         chip.setOnClickListener { onChipClick() }
 
+        // 打标记：ViewReader 遍历时会整棵跳过我们自己的浮层（见 OVERLAY_TAG 的说明）
+        card.tag = OVERLAY_TAG
+        chip.tag = OVERLAY_TAG
         decor.addView(card, matchTop(dp(10), dp(96), dp(10)))
         decor.addView(chip, wrapTopEnd(dp(10), dp(96)))
         // 探测轮询从这里起步（**刻意不放在 onResume**）：微信切到后台时 ticker 是停的，
