@@ -135,6 +135,8 @@ internal class Panel(private val a: Activity) {
     /** 抖动保护计数：机器自己在一段时间内改了几次折叠状态（用户点的不算）。 */
     private var autoToggles = 0
     private var autoToggleAt = 0L
+    /** 上一轮的设置指纹四个分组：用来在轨迹里指出是哪一组在抖。 */
+    private var lastSettingsGroups: List<String> = emptyList()
     /**
      * 折叠 / 展开（默认折叠 —— 不打开的话，脸上就只有一个小按钮）。
      *
@@ -551,23 +553,31 @@ internal class Panel(private val a: Activity) {
             pendingName = ""
             pendingNameTicks = 0
         }
-        val settings = conversationDigest(
-            cfg.prompt, cfg.model, cfg.baseUrl, cfg.apiKey, cfg.model2, cfg.baseUrl2, cfg.apiKey2,
-            cfg.graded.toString(), cfg.temperature.toString(), cfg.maxTokens.toString(),
-            cfg.jsonMode.toString(), cfg.ctx.toString(), cfg.allowSensitive.toString(),
-            cfg.whitelistEnabled.toString(), cfg.whitelist.sorted().toString(),
-            cfg.proxyEnabled.toString(), cfg.proxyPort.toString(), cfg.proxyToken,
+        // 设置指纹拆成四组（跟高级设置的分组分法一致）：万一它还在抖，轨迹里能直接说是哪一组，
+        // 不用再猜「设置 / 档案 / 说话风格之一」到底是哪个（这一条就是靠用户那份轨迹才定位的）。
+        val settingsGroups = listOf(
+            conversationDigest(cfg.prompt, cfg.model, cfg.baseUrl, cfg.apiKey, cfg.model2, cfg.baseUrl2, cfg.apiKey2),
+            conversationDigest(
+                cfg.graded.toString(), cfg.temperature.toString(), cfg.maxTokens.toString(),
+                cfg.jsonMode.toString(), cfg.ctx.toString(), cfg.allowSensitive.toString(),
+            ),
+            conversationDigest(cfg.whitelistEnabled.toString(), cfg.whitelist.sorted().toString()),
+            conversationDigest(cfg.proxyEnabled.toString(), cfg.proxyPort.toString(), cfg.proxyToken),
         )
-        val profile = runCatching {
-            Roles.decode(prefs?.getString(Keys.ROLES, "").orEmpty()).firstOrNull { it.key == observedName }
-        }.getOrNull()
-        // History changes require a fresh parse; the final key excludes already visible records to avoid repeat calls.
-        val revision = conversationDigest(
-            observedName, settings, profile?.name.orEmpty(), profile?.relation.orEmpty(), profile?.note.orEmpty(),
-            prefs?.getBoolean(Keys.SELF_STYLE_ON, false).toString(),
-            if (prefs?.getBoolean(Keys.SELF_STYLE_ON, false) == true) prefs?.getString(Keys.SELF_SKILL, "").orEmpty() else "",
-        )
+        val settings = conversationDigest(*settingsGroups.toTypedArray())
+        // 「要不要重置这一屏」**只看两件事**：这是不是同一个会话（名字）+ 设置有没有改。
+        //
+        // ⚠️ 以前还把「角色档案 / 说话风格」算进来 —— 那两样是**内容**（ask 时才用），而且会一直变：
+        // 用户实测那份轨迹里，它们每 1~2 秒就让 revision 变一次 → 每轮都重置上下文 → 立刻重新问模型
+        // → 卡片正文在「正在读这一屏…」和结果之间来回跳（用户报的「折叠、展开往复循环」就是它，
+        // 第 7 版那句「还是自己关」也是同一个原因）。
+        // 档案 / 风格确实是内容，但它们**不该影响「这一屏是谁」** —— 内容变化由缓存键（resultKey）管，
+        // 而且刻意不让它使缓存失效（档案长一条不该重新烧一次 token）。
+        val revision = conversationDigest(observedName, settings)
         if (revision != contextRevision) {
+            val anotherChat = observedName != chatName
+            val prevGroups = lastSettingsGroups
+            lastSettingsGroups = settingsGroups
             generation++ // Discard replies and rewrites started for the previous conversation or profile.
             busy = false
             rewriteBusy = false
@@ -575,17 +585,28 @@ internal class Panel(private val a: Activity) {
             chatName = observedName
             lastScreenFingerprint = ""
             lastFingerprint = ""
-            lastCallAt = 0L
-            skipSensitiveFor = ""
+            // ⚠️ 节流与「敏感放行」**只在真的换了人**时清零。同名而只是设置改了的话，
+            // 清零 lastCallAt 等于把最短间隔这道闸也拆了 → 每轮都能重新问模型（用户那份轨迹里
+            // 「调用 发起分析」每 1~2 秒一次就是这么来的，白烧 token）。
+            if (anotherChat) {
+                lastCallAt = 0L
+                skipSensitiveFor = ""
+            }
             body = Body.None
             // 换了会话（或提示词 / 档案变了）：上一屏的内容已经不属于这里 ——
             // 这是少数几处「替用户收」的地方之一，不收就会拿着别人的结果改这条消息。
             // 轨迹里必须分清是哪一种：同名但指纹变了 = 设置 / 角色档案 / 说话风格在抖（那是真 bug）。
-            val anotherChat = observedName != chatName
             Trace.note(
                 "换会话",
-                if (anotherChat) "会话名变了（$chatName → $observedName）→ 重置这一屏"
-                else "同名但上下文指纹变了（设置 / 角色档案 / 说话风格之一）→ 只重置内容，不动折叠",
+                if (anotherChat) {
+                    "会话名变了（$chatName → $observedName）→ 重置这一屏"
+                } else {
+                    val names = listOf("接入（接口/Key/模型）", "生成（模式/温度/条数）", "白名单", "代理")
+                    val which = names.indices
+                        .filter { i -> prevGroups.getOrNull(i)?.let { it != settingsGroups[i] } == true }
+                        .map { names[it] }
+                    "同名，但设置变了（${if (which.isEmpty()) "未识别" else which.joinToString("、")}）→ 重置内容，不动折叠"
+                },
             )
             // **只有真的换了人才替用户收起卡片**。同名而指纹抖一下（改了设置、档案长了一条、说话风格更新）
             // 不该把用户正开着的那张卡拍下去 —— 这正是「点开又自己关」最隐蔽的一种来源。
@@ -874,7 +895,12 @@ internal class Panel(private val a: Activity) {
         // 聊天页读到的是消息正文，不是会话名。这一屏跳过，**请求留着**（不消费），
         // 等切到列表页再读 —— 消费掉的话，用户切过去就什么都不会发生了。
         if (onChatPage) {
-            if (fresh) Trace.note("会话", "App 要拉会话列表，但当前在聊天页（读到的是消息正文）→ 跳过，等切到列表页")
+            // 请求**不消费**（切到列表页还能用），但别每 0.9 秒重走一遍视图树、再刷一条同样的轨迹 ——
+            // 用户发来的那份 80 条轨迹里，一半被这一对「跳过」占满了。
+            if (fresh && now - lastConvPullAt > CONV_PULL_MIN_MS) {
+                Trace.note("会话", "App 要拉会话列表，但当前在聊天页（读到的是消息正文）→ 跳过，等切到列表页")
+                lastConvPullAt = now
+            }
             return
         }
         lastConvPullAt = now
