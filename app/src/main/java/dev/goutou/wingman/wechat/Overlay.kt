@@ -125,6 +125,16 @@ internal class Panel(private val a: Activity) {
     private var sensitiveHits: List<String> = emptyList()
     /** 这一屏为什么用不了（[showStuck] 写的）：卡片开着时直接摊给用户看。 */
     private var stuckReason = ""
+    /** 上一次 showMessage 的正文：同一句话复现时不再重建、也不再自动展开（防抖）。 */
+    private var lastMessage = ""
+    /** 上一次 render 的内容签名：同一份结果不重复重建（防抖，见 render）。 */
+    private var renderedSig = ""
+    /** 标题抖动保护：候选新标题 + 它连续出现了几轮（见 tick 里那段）。 */
+    private var pendingName = ""
+    private var pendingNameTicks = 0
+    /** 抖动保护计数：机器自己在一段时间内改了几次折叠状态（用户点的不算）。 */
+    private var autoToggles = 0
+    private var autoToggleAt = 0L
     /**
      * 折叠 / 展开（默认折叠 —— 不打开的话，脸上就只有一个小按钮）。
      *
@@ -281,7 +291,7 @@ internal class Panel(private val a: Activity) {
         refresh.setOnClickListener { regenerate() }
         // 收起：只是折回小按钮，不拉黑这一条 —— 再点按钮随时能打开
         val collapse = label("▾", 16f, colorSub) { setPadding(dp(12), 0, 0, 0) }
-        collapse.setOnClickListener { setExpanded(false, "用户点卡片右上角 ▾") }
+        collapse.setOnClickListener { setExpanded(false, "用户点卡片右上角 ▾", byUser = true) }
         head.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         head.addView(refresh)
         head.addView(collapse)
@@ -521,7 +531,26 @@ internal class Panel(private val a: Activity) {
             Trace.note("标题", "会话标题暂时为空，保留「$chatName」并等待下一轮")
             return
         }
-        val observedName = observedRawName
+        // 标题抖动保护：微信的标题区会短暂显示「对方正在输入…」，会话被复用时也可能先读到上一个名字。
+        // 只有同一个新名字**连着读到两轮**才算真换了人；否则这一轮仍按当前名字处理（不改上下文、不重置）。
+        // 用户报的「折叠、展开、折叠、展开往复循环」最可能的一种来源就是这里：标题在「真名」和
+        // 「正在输入…」之间来回跳，每跳一次都被当成换了会话 → 收起卡片 → 下一轮又变回来。
+        var observedName = observedRawName
+        if (observedName != chatName) {
+            if (observedName == pendingName) {
+                pendingNameTicks++
+            } else {
+                pendingName = observedName
+                pendingNameTicks = 1
+            }
+            if (pendingNameTicks < 2 && chatName.isNotBlank()) {
+                Trace.note("标题", "读到新标题「$observedName」但只出现一轮 → 当作抖动，这一轮仍按「$chatName」处理")
+                observedName = chatName
+            }
+        } else {
+            pendingName = ""
+            pendingNameTicks = 0
+        }
         val settings = conversationDigest(
             cfg.prompt, cfg.model, cfg.baseUrl, cfg.apiKey, cfg.model2, cfg.baseUrl2, cfg.apiKey2,
             cfg.graded.toString(), cfg.temperature.toString(), cfg.maxTokens.toString(),
@@ -1274,6 +1303,18 @@ internal class Panel(private val a: Activity) {
     }
 
     private fun render(s: Suggestion, msgs: List<ChatMsg>, fromCache: Boolean) {
+        // **幂等**：同一份结果、同样几条消息，就不再重建正文。
+        // 重建 = removeAllViews + 重新加一遍，会肉眼可见地闪一下；如果指纹不稳定导致每轮都重建，
+        // 用户看到的就是「卡片折叠、展开、折叠、展开」那种往复抖动（用户实测报过）。
+        val sig = conversationDigest(
+            s.intent, s.risk, s.note, s.why, s.best.toString(), s.partial.toString(),
+            s.replies.joinToString("\u0000") { it.style + it.text }, msgs.size.toString(),
+        )
+        if (body == Body.Result && renderedSig == sig) {
+            setChip("军师 · 风险${s.risk} · ${s.replies.size}条", chipColor(s.risk))
+            return
+        }
+        renderedSig = sig
         body = Body.Result
         title.text = "军师 · ${s.intent} · 风险${s.risk}" + if (fromCache) " · 缓存" else ""
         title.setTextColor(riskColor(s.risk))
@@ -1409,17 +1450,23 @@ internal class Panel(private val a: Activity) {
     }
 
     private fun showMessage(message: String, isError: Boolean = false) {
+        val changed = body != Body.Message || lastMessage != message
         body = Body.Message
-        title.text = if (isError) "生成失败" else "TalkTact"
-        title.setTextColor(if (isError) colorBad else colorAccent)
-        bodyBox.removeAllViews()
-        bodyBox.addView(label(message, 13f, if (isError) colorBad else colorMain))
+        lastMessage = message
+        // 同一句话复现时只更新按钮：**不再重复自动展开** —— 否则「每轮都弹一次」会和收起动作
+        // 打起架来，看起来就是折叠 / 展开往复循环（用户实测报过）。
+        if (changed) {
+            title.text = if (isError) "生成失败" else "TalkTact"
+            title.setTextColor(if (isError) colorBad else colorAccent)
+            bodyBox.removeAllViews()
+            bodyBox.addView(label(message, 13f, if (isError) colorBad else colorMain))
+        }
         // 出错和提示这类「你必须看一眼」的事，直接摊开，不折叠
         setChip(
             if (isError) "⚠ 军师出错 · 点开看" else "军师 · 点开看",
             if (isError) 0xE6D64545.toInt() else 0xE67C3AED.toInt(),
         )
-        setExpanded(true, if (isError) "出错，要你看一眼" else "提示，要你看一眼")
+        if (changed) setExpanded(true, if (isError) "出错，要你看一眼" else "提示，要你看一眼")
     }
 
     // ---------------- 折叠 / 展开 ----------------
@@ -1442,10 +1489,29 @@ internal class Panel(private val a: Activity) {
      * 不只改状态，还把「谁让它变的」写进轨迹 —— 以前没有这一条，于是用户说的
      * 「卡片自己关了」在轨迹里**完全看不见**（这也是它拖了两轮没查出来的原因）。
      */
-    private fun setExpanded(visible: Boolean, why: String = "") {
-        if (expanded != visible) {
-            Trace.note("卡片", (if (visible) "展开" else "收起") + "（$why）")
+    private fun setExpanded(visible: Boolean, why: String = "", byUser: Boolean = false) {
+        if (expanded == visible) {
+            applyVisibility()
+            return
         }
+        if (!byUser) {
+            // **抖动保护**：机器自己在一段时间内反复改折叠状态 → 停手。
+            // 用户实测报过「折叠、展开、折叠、展开往复循环」——那是 tick 里两个分支在互相打架；
+            // 不管根因是哪两个，这种抖动都不该由用户承受。顶到上限就保持现状，并把原因记进轨迹
+            // （轨迹会连着写出前几次是谁让它变的，根因照样查得到）。
+            val now = System.currentTimeMillis()
+            if (now - autoToggleAt > AUTO_TOGGLE_WINDOW_MS) {
+                autoToggles = 0
+                autoToggleAt = now
+            }
+            autoToggles++
+            if (autoToggles > AUTO_TOGGLE_MAX) {
+                Trace.note("卡片", "抖动保护：${AUTO_TOGGLE_WINDOW_MS / 1000} 秒内机器已改过 $AUTO_TOGGLE_MAX 次 → 不再自动改（这次的原因：$why）")
+                applyVisibility()
+                return
+            }
+        }
+        Trace.note("卡片", (if (visible) "展开" else "收起") + "（$why）" + if (byUser) " · 用户点的" else "")
         expanded = visible
         applyVisibility()
     }
@@ -1484,17 +1550,17 @@ internal class Panel(private val a: Activity) {
             "点按钮 → $action（expanded=$expanded busy=$busy 有内容=$hasResult 有缓存=${cache.containsKey(lastFingerprint)} 正文=$body）",
         )
         when (action) {
-            ChipTap.Collapse -> setExpanded(false, "用户点按钮收起")
-            ChipTap.Expand -> setExpanded(true, "用户点按钮展开（手上已有内容）")
+            ChipTap.Collapse -> setExpanded(false, "用户点按钮收起", byUser = true)
+            ChipTap.Expand -> setExpanded(true, "用户点按钮展开（手上已有内容）", byUser = true)
             ChipTap.Restore -> {
                 val cached = cache[lastFingerprint] ?: return
                 Trace.note("缓存", "点按钮：这一屏的结果还在缓存里，直接摆出来（不重新调模型）")
-                setExpanded(true, "用户点按钮展开（摆缓存）")
+                setExpanded(true, "用户点按钮展开（摆缓存）", byUser = true)
                 render(cached, lastMsgs, fromCache = true)
             }
             ChipTap.Regenerate -> {
                 // 先把卡片打开：重新识别要等模型，开着才有「正在读这一屏」可看
-                setExpanded(true, "用户点按钮展开（去重新识别）")
+                setExpanded(true, "用户点按钮展开（去重新识别）", byUser = true)
                 regenerate()
             }
         }
@@ -1656,6 +1722,10 @@ internal class Panel(private val a: Activity) {
 
 /** 「被动收集会话名」的最小间隔：那一屏每 2.6 秒 tick 一次，没必要次次都读整棵视图树。 */
 private const val CONV_PULL_MIN_MS = 15_000L
+
+/** 折叠抖动保护：这个窗口内机器自己最多改 [AUTO_TOGGLE_MAX] 次折叠状态（用户点的不受限）。 */
+private const val AUTO_TOGGLE_WINDOW_MS = 10_000L
+private const val AUTO_TOGGLE_MAX = 3
 
 /**
  * 实时探测的轮询间隔。
